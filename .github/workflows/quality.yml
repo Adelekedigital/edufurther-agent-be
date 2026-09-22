@@ -1,0 +1,65 @@
+name: Quality gate
+
+on:
+  pull_request:
+  # Only main. A bare `push:` also fires on the branch behind a pull
+  # request, so every PR runs the whole gate twice against the same commit
+  # - double the minutes, and two results to reconcile when they disagree.
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: quality-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+
+    # The gate runs against real PostgreSQL. This service checkpoints
+    # LangGraph state, leases jobs with FOR UPDATE SKIP LOCKED and relies on
+    # ON CONFLICT for idempotency - none of which a fake exercises. A run
+    # without this service would skip those tests silently rather than fail,
+    # so it would not be a pass.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: edufurther_agent_test
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d edufurther_agent_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      TEST_DATABASE_URL: postgresql+asyncpg://postgres:postgres@127.0.0.1:5432/edufurther_agent_test
+
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          enable-cache: true
+      # Pinned in pyproject as >=3.13,<3.14: LangGraph's dependency tree is
+      # not reliably 3.14-ready, which is why this service does not follow
+      # Scholarship Finder onto it.
+      - run: uv python install 3.13
+      - run: uv sync --locked --group dev
+
+      # The suite needs the schema present; this service never migrates on
+      # boot, so nothing else would create it.
+      - name: Apply migrations to the test database
+        env:
+          DATABASE_URL: ${{ env.TEST_DATABASE_URL }}
+        run: uv run alembic upgrade head
+
+      # compile, pytest with coverage, ruff, ruff-format and mypy - the same
+      # entry point developers run locally, so CI cannot drift from it.
+      - run: uv run python scripts/check.py
