@@ -1,0 +1,73 @@
+[project]
+name = "edufurther-agent-be"
+version = "0.1.0"
+description = "Edufurther Agent platform - reusable LangGraph workflow runtime"
+readme = "README.md"
+# Pinned below 3.14 deliberately: the router is on 3.13 and LangGraph's
+# dependency tree is not reliably 3.14-ready. Scholarship Finder runs 3.14,
+# but it has no LangGraph.
+requires-python = ">=3.13,<3.14"
+dependencies = [
+  "fastapi[standard]>=0.115,<1",
+  "pydantic-settings>=2.7,<3",
+  "sqlalchemy[asyncio]>=2.0,<3",
+  "asyncpg>=0.30,<1",
+  "alembic>=1.14,<2",
+  "PyJWT[crypto]>=2.10,<3",
+  "httpx>=0.28,<1",
+  # zoneinfo ships no IANA database on Windows or on the slim deployment
+  # image; without this every provider timezone resolves as unknown with no
+  # error at all. Same reason Scholarship Finder carries it.
+  "tzdata>=2024.1",
+  "langgraph>=1.2.11",
+  "langgraph-checkpoint-postgres>=3.1.2",
+  "psycopg[binary,pool]>=3.3.6",
+]
+
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[dependency-groups]
+dev = [
+  "pytest>=9.0.3,<10",
+  "pytest-asyncio>=1,<2",
+  "pytest-cov>=6,<8",
+  "ruff>=0.9,<1",
+  "mypy>=1.15,<2",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+exclude = [".uv-cache", ".venv", "build", "dist", "migrations/versions"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+extend-ignore = ["B008"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+# One loop for the whole run: the application engine is cached per process,
+# so a fresh loop per test leaves it holding connections bound to a closed
+# loop. Same constraint Scholarship Finder hit.
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
+pythonpath = [".", "src"]
+# Without this the root logger sits at WARNING, every logger.info call
+# short-circuits before building a LogRecord, and a bad `extra` key - which
+# raises only when the record is actually constructed - reaches production
+# having passed a green suite.
+log_level = "INFO"
+
+[tool.mypy]
+python_version = "3.13"
+mypy_path = "src"
+ignore_missing_imports = true

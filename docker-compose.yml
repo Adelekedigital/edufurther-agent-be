@@ -1,0 +1,22 @@
+# Pinned so the project name does not follow the directory name.
+# Compose derives it from the folder by default, so renaming the
+# checkout silently points at a new, empty volume and the database
+# looks wiped.
+name: edufurther-agent-be
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: edufurther_agent
+    ports:
+      # Deliberately not 5432, and not Scholarship Finder's 55433: running
+      # both services locally at once is the normal case for this work.
+      - "55434:5432"
+    volumes:
+      - agent_postgres_data:/var/lib/postgresql/data
+
+volumes:
+  agent_postgres_data:

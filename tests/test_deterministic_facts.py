@@ -1,0 +1,180 @@
+"""The deterministic half of extraction, ported from Scholarship Finder.
+
+These are the functions that decide agreement and identity. The model never
+gets a say in either: it reads pages and proposes facts, and this code
+decides whether two values match and whether two candidates are the same
+award. Ported verbatim so the agent's answers and the product's cannot
+diverge.
+"""
+
+import pytest
+
+from app.usecases.scholarship_finder.extraction import (
+    EXTRACTION_VERSION,
+    extract_candidate_facts,
+)
+from app.usecases.scholarship_finder.fact_matching import (
+    amounts_match,
+    deadlines_match,
+    parse_amount,
+    parse_deadline,
+)
+from app.usecases.scholarship_finder.normalization import normalize_discovery
+
+# --- identity ---------------------------------------------------------
+
+
+def test_identity_ignores_case_and_whitespace():
+    assert (
+        normalize_discovery("  Chevening   Scholarship ").identity_key
+        == normalize_discovery("chevening scholarship").identity_key
+    )
+
+
+def test_identity_ignores_word_order():
+    """Token-sorted on purpose: a list page and a feed may name the same
+    award in different orders, and they are still one award."""
+    assert (
+        normalize_discovery("Scholarship Chevening").identity_key
+        == normalize_discovery("Chevening Scholarship").identity_key
+    )
+
+
+def test_identity_ignores_punctuation():
+    assert (
+        normalize_discovery("Gates-Cambridge Scholarship!").identity_key
+        == normalize_discovery("Gates Cambridge Scholarship").identity_key
+    )
+
+
+def test_different_awards_get_different_identities():
+    assert (
+        normalize_discovery("Chevening Scholarship").identity_key
+        != normalize_discovery("Rhodes Scholarship").identity_key
+    )
+
+
+def test_the_provider_participates_in_identity():
+    assert (
+        normalize_discovery("Excellence Award", "Oxford").identity_key
+        != normalize_discovery("Excellence Award", "Cambridge").identity_key
+    )
+
+
+# --- amounts ----------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [("£13,000", ("£", 13000)), ("$1,500.50", ("$", 1500.5)), ("€ 900", ("€", 900))],
+)
+def test_amounts_parse(raw, expected):
+    parsed = parse_amount(raw)
+    assert parsed is not None
+    assert (parsed[0], float(parsed[1])) == expected
+
+
+def test_a_near_miss_amount_is_not_agreement():
+    """The verification standard's own worst case: a claimed GBP 13,000
+    against a real GBP 16,750. Any fuzzy tolerance would call that
+    corroboration."""
+    assert amounts_match("£13,000", "£16,750") is False
+
+
+def test_the_same_amount_written_differently_still_matches():
+    assert amounts_match("£13,000", "£ 13,000") is True
+
+
+def test_the_same_number_in_different_currencies_is_not_agreement():
+    """A currency-blind comparison would treat GBP 10,000 and USD 10,000 as
+    the same award value. They are not."""
+    assert amounts_match("£10,000", "$10,000") is False
+
+
+@pytest.mark.parametrize("raw", ["ten thousand pounds", "10000", "£", "", "GBP 10,000"])
+def test_an_unparseable_amount_never_matches(raw):
+    """Unparseable is not agreement. Returning True here would let a
+    malformed figure corroborate anything."""
+    assert parse_amount(raw) is None
+    assert amounts_match(raw, raw) is False
+
+
+# --- deadlines --------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "raw", ["March 15, 2026", "March 15 2026", "March 15th 2026", "march 15th, 2026"]
+)
+def test_deadline_spellings_parse_to_one_date(raw):
+    parsed = parse_deadline(raw)
+    assert parsed is not None
+    assert (parsed.year, parsed.month, parsed.day) == (2026, 3, 15)
+
+
+def test_the_same_deadline_written_differently_matches():
+    assert deadlines_match("March 15, 2026", "March 15th 2026") is True
+
+
+def test_a_different_year_is_not_agreement():
+    """The commonest stale-listing failure: last cycle's page, this
+    cycle's claim."""
+    assert deadlines_match("March 15, 2026", "March 15, 2025") is False
+
+
+@pytest.mark.parametrize("raw", ["15/03/2026", "next spring", "soon", ""])
+def test_an_unparseable_deadline_never_matches(raw):
+    assert parse_deadline(raw) is None
+    assert deadlines_match(raw, raw) is False
+
+
+# --- deterministic extraction ----------------------------------------
+
+
+def test_amounts_and_dates_are_pulled_from_prose():
+    facts = extract_candidate_facts(
+        "PhD Funding", "Worth £10,000 closing March 1, 2026 for doctoral study."
+    )
+
+    assert facts["funding_mentions"] == ["£10,000"]
+    assert facts["deadline_mentions"] == ["March 1, 2026"]
+    assert facts["level_mentions"] == ["doctorate"]
+
+
+def test_a_trailing_comma_in_prose_is_captured_but_harmless():
+    r"""Scholarship Finder's currency pattern ends in `[\d,]*`, so an amount
+    followed by a comma keeps it: "£10,000, closing" extracts "£10,000,".
+
+    Ported verbatim rather than corrected, because the agent's
+    `extracted_facts` has to equal the product's for the same text.
+    Correctness is unaffected - `parse_amount` strips commas before
+    comparing - and this pins that, since it is the only reason the quirk
+    is safe to carry over.
+    """
+    facts = extract_candidate_facts("Award", "Worth £10,000, closing soon.")
+
+    assert facts["funding_mentions"] == ["£10,000,"]
+    assert amounts_match("£10,000,", "£10,000") is True
+
+
+def test_extraction_never_returns_a_verdict():
+    """It explains what the text says; it never decides whether the
+    candidate is real, eligible or publishable."""
+    facts = extract_candidate_facts("Award", "£1,000")
+
+    assert facts["needs_human_review"] is True
+    assert "verified" not in facts
+    assert facts["extraction_version"] == EXTRACTION_VERSION
+
+
+def test_empty_input_yields_empty_facts_not_an_error():
+    facts = extract_candidate_facts(None, None)
+
+    assert facts["funding_mentions"] == []
+    assert facts["deadline_mentions"] == []
+    assert facts["needs_human_review"] is True
+
+
+def test_an_eligibility_phrase_is_captured_verbatim():
+    facts = extract_candidate_facts("Award", "Open to international students.")
+
+    assert facts["eligibility_phrase"] == "international students"
