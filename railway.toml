@@ -1,5 +1,10 @@
 [deploy]
 startCommand = "uv run fastapi run main.py --host 0.0.0.0 --port $PORT"
-healthcheckPath = "/health"
+# /ready, not /health. Liveness deliberately touches nothing external, so
+# a deploy carrying a bad DATABASE_URL would pass it and go live broken.
+# /ready returns 503 when the database is unreachable, and still 200 on a
+# schema that is merely behind - so it catches misconfiguration without
+# blocking the very deploy that ships a migration.
+healthcheckPath = "/ready"
 healthcheckTimeout = 100
 restartPolicyType = "ON_FAILURE"

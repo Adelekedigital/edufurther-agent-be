@@ -1,0 +1,43 @@
+name: Database migrations
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        # Only environments that actually have a DATABASE_URL secret belong
+        # here. Scholarship Finder offered `production` for months without
+        # one; the first dispatch to it failed at engine construction, after
+        # an operator had already decided to migrate production. Add the
+        # secret and the option in the same change, never one before the other.
+        description: GitHub Environment whose DATABASE_URL should be migrated
+        required: true
+        type: choice
+        options:
+          - staging
+
+permissions:
+  contents: read
+
+# Never cancel a migration in flight, and never run two against the same
+# database at once: an interrupted DDL transaction is a far worse state
+# than a queued job.
+concurrency:
+  group: migrations-${{ inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          enable-cache: true
+      - run: uv python install 3.13
+      # --no-dev: a migration run needs the runtime, not pytest or mypy.
+      - run: uv sync --locked --no-dev
+      - name: Apply Alembic migrations
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: uv run alembic upgrade head
