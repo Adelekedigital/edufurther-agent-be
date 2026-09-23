@@ -28,6 +28,7 @@ from app.tools.budget import reserve_call
 from app.tools.direct_fetch import fetch_source, validate_source_url
 from app.tools.jina import PROVIDER as JINA_PROVIDER
 from app.tools.jina import fetch_via_jina
+from app.tools.throttle import host_pace
 
 logger = logging.getLogger("app.tools.retrieval")
 
@@ -119,14 +120,22 @@ async def _direct(
 ) -> RetrievedPage:
     settings = get_settings()
     spec = registry.require_enabled(registry.DIRECT_FETCH)
-    fetched = await fetch_source(
-        url,
-        approved_domains,
-        max_bytes=settings.fetch_max_bytes,
-        timeout_seconds=spec.timeout_seconds,
-        connect_timeout_seconds=settings.fetch_connect_timeout_seconds,
-        allow_any_public_domain=allow_any_public_domain,
-    )
+    # Paced per host, around the whole logical fetch including any redirect
+    # hop - a redirect is one page from the origin's point of view, and
+    # charging it twice would halve the effective rate for no reason.
+    #
+    # Only the direct path. Jina fetches from its own infrastructure, so
+    # its requests do not land on the origin and pacing them would throttle
+    # the fallback precisely when the direct route is already struggling.
+    async with host_pace(url, settings.fetch_min_host_interval_seconds):
+        fetched = await fetch_source(
+            url,
+            approved_domains,
+            max_bytes=settings.fetch_max_bytes,
+            timeout_seconds=spec.timeout_seconds,
+            connect_timeout_seconds=settings.fetch_connect_timeout_seconds,
+            allow_any_public_domain=allow_any_public_domain,
+        )
     return RetrievedPage(
         url=fetched.url,
         text=fetched.text,

@@ -44,6 +44,10 @@ def _configure_environment() -> None:
     os.environ["DATABASE_URL"] = TEST_DATABASE_URL
     os.environ["INTERNAL_SERVICE_TOKEN"] = TEST_SERVICE_TOKEN
     os.environ.setdefault("ENVIRONMENT", "development")
+    # Off for the suite. Every fetch here is mocked, so the pacing would buy
+    # nothing and cost a real sleep per host on hundreds of tests. The
+    # behaviour itself is covered directly in tests/test_host_throttle.py.
+    os.environ.setdefault("FETCH_MIN_HOST_INTERVAL_SECONDS", "0")
 
     from app.core.config import Settings, get_settings
     from app.infra.database import _engine_and_sessions

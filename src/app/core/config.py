@@ -104,6 +104,16 @@ class Settings(BaseSettings):
     fetch_timeout_seconds: float = 15.0
     fetch_connect_timeout_seconds: float = 5.0
     fetch_max_bytes: int = 2_000_000
+    #: Minimum gap between two direct fetches of the *same* host.
+    #:
+    #: Discoveries arrive grouped by source, so a batch is many requests to
+    #: one origin in quick succession. A ten-record run produced a 35%
+    #: connect-failure rate against a single host; every failure was
+    #: classified retryable and retried, which is the runtime working as
+    #: designed against a problem it had caused. Pacing prevents it instead.
+    #:
+    #: Per process. One replica today; a second would double the real rate.
+    fetch_min_host_interval_seconds: float = 1.5
     # Registered but unimplemented until harvesting moves off Scholarship
     # Finder; the timeouts exist so the policy is already expressible.
     tavily_timeout_seconds: float = 30.0
