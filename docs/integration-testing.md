@@ -187,7 +187,7 @@ Settings refuses to construct if they match.
 ```env
 ENVIRONMENT=development
 DATABASE_URL=postgresql+asyncpg://postgres:postgres@127.0.0.1:55434/edufurther_agent
-AGENT_SERVICE_TOKEN=local-dev-token
+INTERNAL_SERVICE_TOKEN=local-dev-token
 
 SCHOLARSHIP_FINDER_BASE_URL=http://127.0.0.1:8097
 SCHOLARSHIP_FINDER_AGENT_TOKEN=local-agent-token
@@ -201,11 +201,10 @@ SHADOW_MODE=true
 WORKFLOW_VERSION=scholarship-verification-v1
 ```
 
-`AGENT_SERVICE_TOKEN` means different things on each side. On Finder it is
-the credential it **accepts** from the Agent. On the Agent it is what the
-Agent accepts from whoever submits jobs. The Agent's *outbound* credential
-is `SCHOLARSHIP_FINDER_AGENT_TOKEN`, and that is the one that must equal
-Finder's `AGENT_SERVICE_TOKEN`.
+Three secrets, not two. Finder's `AGENT_SERVICE_TOKEN` is what it
+**accepts** from the Agent, and must equal the Agent's outbound
+`SCHOLARSHIP_FINDER_AGENT_TOKEN`. The Agent's `INTERNAL_SERVICE_TOKEN` is a
+separate value: what the Agent accepts from whoever submits jobs to it.
 
 ---
 

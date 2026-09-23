@@ -17,7 +17,7 @@ async def require_agent_service(x_service_token: str | None = Header(default=Non
     an open service. `Settings.require_deployed_secrets` turns that into a
     boot failure in staging and production, where silence would be worse.
     """
-    expected = get_settings().agent_service_token
+    expected = get_settings().internal_service_token
     # Compared as bytes. Starlette decodes headers as latin-1, so a byte
     # >= 0x80 yields a non-ASCII str and `hmac.compare_digest` raises
     # TypeError on it - an unhandled 500, from an unauthenticated request,

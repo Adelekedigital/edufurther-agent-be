@@ -263,8 +263,12 @@ See [`.env.example`](.env.example). Two defaults are deliberately the cautious o
 
 * `SHADOW_MODE=true` - evidence and run records are written, review tasks are never touched.
   An unconfigured environment cannot affect the product's review queue.
-* `AGENT_SERVICE_TOKEN` unset fails every authenticated request closed, and the service
-  refuses to boot without it in staging or production.
+* `INTERNAL_SERVICE_TOKEN` unset fails every authenticated request closed, and the service
+  refuses to boot without it in staging or production. It is what this service *accepts*;
+  the credential it *sends* to the product is `SCHOLARSHIP_FINDER_AGENT_TOKEN`, and the two
+  are different secrets. Scholarship Finder's own `AGENT_SERVICE_TOKEN` is a third thing
+  again - what Finder accepts from this service - which is precisely why the inbound one
+  here is not called that.
 
 `AUTO_APPROVE_ENABLED` is a Scholarship Finder variable. It is not an agent variable, and it
 stays `false` for the duration of this build.

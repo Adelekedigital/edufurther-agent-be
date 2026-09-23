@@ -41,9 +41,25 @@ class Settings(BaseSettings):
     db_max_overflow: int = 20
 
     # --- Inbound authentication --------------------------------------
+    #: What this service accepts on its own internal surface, matching
+    #: Scholarship Finder's setting of the same name. The convention across
+    #: the ecosystem is that INTERNAL_SERVICE_TOKEN always names the
+    #: *acceptor's* own credential, so it means the same thing everywhere
+    #: even though the value differs per service - exactly like DATABASE_URL.
+    #:
+    #: Deliberately not AGENT_SERVICE_TOKEN. That name inverts roles
+    #: depending on where it is read: on Finder it names the *caller* (what
+    #: Finder accepts from this service), so using it here for the
+    #: *acceptor* would give one name two meanings across two deployments.
+    #: Swapping the two is invisible when it happens - both values are
+    #: valid tokens, so the mistake surfaces as an ordinary 401 rather than
+    #: as a typo.
+    #:
+    #: The outbound counterpart is `scholarship_finder_agent_token`.
+    #:
     #: Fails closed when unset: no token configured means no caller can
     #: reach an authenticated route at all.
-    agent_service_token: str | None = None
+    internal_service_token: str | None = None
 
     # --- AI Router (outbound) ----------------------------------------
     ai_router_base_url: str | None = None
@@ -106,8 +122,8 @@ class Settings(BaseSettings):
         routing or client bug rather than missing configuration. Failing at
         boot puts the error where someone will read it.
         """
-        if self.environment in DEPLOYED_ENVIRONMENTS and not self.agent_service_token:
-            raise ValueError("AGENT_SERVICE_TOKEN is required in staging and production")
+        if self.environment in DEPLOYED_ENVIRONMENTS and not self.internal_service_token:
+            raise ValueError("INTERNAL_SERVICE_TOKEN is required in staging and production")
         return self
 
     @property

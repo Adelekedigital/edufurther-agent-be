@@ -42,7 +42,7 @@ TABLES = (
 @pytest.fixture(scope="session", autouse=True)
 def _configure_environment() -> None:
     os.environ["DATABASE_URL"] = TEST_DATABASE_URL
-    os.environ["AGENT_SERVICE_TOKEN"] = TEST_SERVICE_TOKEN
+    os.environ["INTERNAL_SERVICE_TOKEN"] = TEST_SERVICE_TOKEN
     os.environ.setdefault("ENVIRONMENT", "development")
 
     from app.core.config import Settings, get_settings

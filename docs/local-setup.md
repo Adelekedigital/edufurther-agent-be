@@ -83,18 +83,20 @@ CURSOR_SECRET=development-only-change-me
 ```env
 ENVIRONMENT=development
 DATABASE_URL=postgresql+asyncpg://postgres:postgres@127.0.0.1:55434/edufurther_agent
-AGENT_SERVICE_TOKEN=local-dev-token
+INTERNAL_SERVICE_TOKEN=local-dev-token
 SCHOLARSHIP_FINDER_BASE_URL=http://127.0.0.1:8097
 SCHOLARSHIP_FINDER_AGENT_TOKEN=local-agent-token
 SHADOW_MODE=true
 WORKFLOW_VERSION=scholarship-verification-v1
 ```
 
-`AGENT_SERVICE_TOKEN` means two different things and they are not the same
-value: on Scholarship Finder it is the credential it *accepts* from the
-agent; on the agent it is the credential *it* accepts from whoever submits
-jobs. The agent's outbound one is `SCHOLARSHIP_FINDER_AGENT_TOKEN`, and that
-is what must match Scholarship Finder's.
+Three secrets, not two. Scholarship Finder's `AGENT_SERVICE_TOKEN` is what
+it *accepts* from the agent, and must equal the agent's outbound
+`SCHOLARSHIP_FINDER_AGENT_TOKEN`. The agent's own `INTERNAL_SERVICE_TOKEN`
+is a separate value: what the agent accepts from whoever submits jobs to
+it. The inbound one is named for its direction rather than for the service
+so that no single name means two different things across the two
+deployments.
 
 Then:
 
