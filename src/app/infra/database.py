@@ -38,10 +38,16 @@ def normalize_database_url(url: str) -> str:
     if not parts.query:
         return url
     query = [(k, v) for k, v in parse_qsl(parts.query, keep_blank_values=True)]
+    # The mode is carried through verbatim, not reduced to a boolean.
+    # asyncpg's `ssl` takes exactly libpq's sslmode vocabulary - it parses
+    # the string through its own SSLMode enum - so `ssl=true` is rejected
+    # at connect time with "`sslmode` parameter must be one of: ...", an
+    # error that names a parameter the URL no longer contains. Passing the
+    # mode through also keeps verify-ca and verify-full distinct from
+    # require, where collapsing them silently dropped certificate
+    # verification.
     rewritten = [
-        ("ssl", "true" if value in {"require", "verify-ca", "verify-full"} else "false")
-        if key == "sslmode"
-        else (key, value)
+        ("ssl", value) if key == "sslmode" else (key, value)
         for key, value in query
         if key != "channel_binding"
     ]

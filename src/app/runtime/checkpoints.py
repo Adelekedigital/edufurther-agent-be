@@ -56,10 +56,12 @@ def psycopg_dsn(url: str) -> str:
     parts = urlsplit(url)
     if not parts.query:
         return url
+    # Carried through verbatim, for the same reason as the outbound
+    # direction: both drivers speak libpq's sslmode vocabulary, so there is
+    # nothing to reduce. The previous mapping collapsed anything it did not
+    # recognise to `disable`, which turned verify-full into no TLS at all.
     rewritten = [
-        ("sslmode", "require" if value.lower() in {"true", "1", "require"} else "disable")
-        if key == "ssl"
-        else (key, value)
+        ("sslmode", value) if key == "ssl" else (key, value)
         for key, value in parse_qsl(parts.query, keep_blank_values=True)
     ]
     return urlunsplit(parts._replace(query=urlencode(rewritten)))
