@@ -311,3 +311,45 @@ def test_the_caller_identity_matches_the_registered_service_caller():
     assert ISSUER == "edufurther-agent"
     assert AUDIENCE == "edufurther-ai-router"
     assert SCOPE == "ai:execute"
+
+
+async def test_each_call_sends_its_own_request_id(keypair, monkeypatch, captured):
+    """The router binds one X-Request-ID to one idempotency key, so sending
+    the job's correlation id for every step made every model call after the
+    first a 409 REQUEST_ID_COLLISION - which only surfaced once a workflow
+    ran past classification for the first time."""
+    private, _ = keypair
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.headers["X-Request-ID"])
+        return ok_response(captured)(request)
+
+    client = make_client(private, monkeypatch, captured, handler)
+    base = sample_request()
+    for step in ("classify", "facts:0"):
+        # Rebuilt rather than mutated: the request is frozen, which is what
+        # stops a retry quietly rewriting the key it is meant to replay.
+        await client.execute(
+            AIRouterRequest(
+                task=base.task,
+                feature_id=base.feature_id,
+                correlation_id=base.correlation_id,
+                idempotency_key=f"job-1:{step}",
+                source_data=base.source_data,
+                request_id=f"{base.correlation_id}:{step}",
+            )
+        )
+
+    assert len(set(seen)) == 2, f"two calls in one run shared a request id: {seen}"
+    assert all(s.startswith(sample_request().correlation_id) for s in seen)
+
+
+async def test_the_request_id_falls_back_to_the_correlation_id(keypair, monkeypatch, captured):
+    """Callers making a single request per run need not supply one."""
+    private, _ = keypair
+    client = make_client(private, monkeypatch, captured, ok_response(captured))
+
+    await client.execute(sample_request())
+
+    assert captured["request"].headers["X-Request-ID"] == sample_request().correlation_id

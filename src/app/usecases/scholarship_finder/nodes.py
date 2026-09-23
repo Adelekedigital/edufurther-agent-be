@@ -91,9 +91,13 @@ async def _ask(
 
     The key is derived from the job and the step rather than random, so a
     retried node replays the router's stored response instead of paying for
-    the same call twice. The correlation id doubles as the router's
-    `X-Request-ID`, which seeds its Langfuse trace - so a run's traces stay
-    findable from the job.
+    the same call twice.
+
+    The `X-Request-ID` seeds the router's Langfuse trace and is the only
+    caller-controlled input to it, so it keeps the correlation id as a
+    prefix - but it has to be unique per call. The router treats one request
+    id as belonging to one idempotency key, and sending the job's id for
+    every step meant only the first model call in a job ever succeeded.
     """
     return await client.execute(
         AIRouterRequest(
@@ -101,6 +105,11 @@ async def _ask(
             feature_id=FEATURE_ID,
             correlation_id=state["correlation_id"],
             idempotency_key=f"{state['job_id']}:{key}",
+            # Prefixed with the correlation id so a run's traces still group,
+            # but suffixed per step: the router binds one X-Request-ID to one
+            # idempotency key, so reusing the job's id across calls made every
+            # request after the first a 409 REQUEST_ID_COLLISION.
+            request_id=f"{state['correlation_id']}:{key}",
             source_data=source_data,
         )
     )
@@ -572,13 +581,22 @@ def _agreement(reported: Any, official: Any, comparator=amounts_match) -> bool |
 
     The product draws the same distinction in its corroboration checks: a
     candidate that asserts no deadline has not been contradicted about one.
+
+    Both directions of "nothing to compare" count. This once returned False
+    when the *official* page was silent, which reads as "the official page
+    says otherwise" - and False on a deadline is exactly what drives
+    REJECT_RECOMMENDED, the outcome asserting the official page contradicts
+    the claim. An official page that simply does not print a deadline
+    contradicts nothing; plenty state funding and link the dates elsewhere.
+
+    It cost a real rejection: a Canadian federal award whose official page
+    the workflow fetched successfully, found no parseable deadline on, and
+    rejected for disagreeing with a deadline it had never read.
     """
     reported_value = _first(reported)
     official_value = _first(official)
-    if reported_value is None:
+    if reported_value is None or official_value is None:
         return None
-    if official_value is None:
-        return False
     return comparator(reported_value, official_value)
 
 

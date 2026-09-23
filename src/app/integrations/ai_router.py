@@ -71,6 +71,11 @@ class AIRouterRequest:
     #: response for a repeated key rather than calling a model again.
     idempotency_key: str
     source_data: dict[str, Any]
+    #: Seeds the router's Langfuse trace. Must be unique per call: the
+    #: router rejects a repeat carrying a different idempotency key with
+    #: 409 REQUEST_ID_COLLISION. Defaults to the correlation id for callers
+    #: that make a single request per run.
+    request_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -168,7 +173,7 @@ class AIRouterClient:
             # The router seeds its Langfuse trace id from this header, and
             # it is the only caller-controlled input to that id. Sending the
             # correlation id makes a run's traces findable from a job.
-            "X-Request-ID": request.correlation_id,
+            "X-Request-ID": request.request_id or request.correlation_id,
         }
         async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
             response = await client.post(

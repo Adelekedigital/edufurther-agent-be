@@ -352,3 +352,39 @@ def test_an_unusable_page_routes_around_the_model():
     # Absent means older checkpoints, which predate the flag: classify, as
     # they always did, rather than silently changing their outcome on resume.
     assert route_after_fetch({}) == "classify_page"
+
+
+# --- silence on the official page is not disagreement -------------------
+
+
+def test_an_official_page_that_states_nothing_does_not_disagree():
+    """REJECT_RECOMMENDED asserts the official page contradicts the claim.
+
+    This returned False when the official page was simply silent, which
+    reads as "says otherwise" - and False on a deadline is exactly what
+    drives a rejection. It cost a real one: a Canadian federal award whose
+    official page was fetched successfully, had no parseable deadline, and
+    was rejected for disagreeing with a deadline nobody had read.
+    """
+    from app.usecases.scholarship_finder.nodes import _agreement
+
+    assert _agreement(["31 March 2026"], []) is None
+    assert _agreement(["31 March 2026"], None) is None
+
+
+def test_nothing_claimed_is_still_nothing_to_compare():
+    from app.usecases.scholarship_finder.nodes import _agreement
+
+    assert _agreement([], ["31 March 2026"]) is None
+    assert _agreement(None, ["31 March 2026"]) is None
+
+
+def test_two_present_values_are_still_compared():
+    """The fix must not make disagreement unreachable - a real
+    contradiction is the one thing REJECT_RECOMMENDED is for."""
+    from app.usecases.scholarship_finder.nodes import _agreement
+
+    # Symbols, not currency codes: `parse_amount` reads "$10,000", and a
+    # value it cannot parse is not a comparison it can make.
+    assert _agreement(["$10,000"], ["$10,000"]) is True
+    assert _agreement(["$10,000"], ["$50,000"]) is False
