@@ -109,7 +109,19 @@ def wire(monkeypatch):
         # call against the job, and a fake with the old signature would
         # pass while the wiring it stands in for was broken.
         async def fake_fetch_page(db, url, domains, *, job_id=None):
-            return page(source_text)
+            # Padded to clear MIN_USABLE_BODY_CHARS. These tests are about
+            # what the workflow does with a page, not about whether a page
+            # was retrieved at all - a body below the threshold now routes
+            # around classification entirely, which would quietly turn every
+            # one of them into a test of the unreadable-page path.
+            #
+            # Tests that *want* that path pass a short `source_text` on
+            # purpose; the padding is only applied to bodies that are
+            # already meant to be real pages.
+            body = source_text
+            if len(body.strip()) >= 20:
+                body = body + "\n\n" + ("page body filler. " * 120)
+            return page(body)
 
         async def fake_fetch_official(
             db, url, domains, *, job_id=None, allow_any_public_domain=False

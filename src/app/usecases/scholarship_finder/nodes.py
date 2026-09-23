@@ -34,7 +34,7 @@ from app.integrations.ai_router import (
 from app.integrations.scholarship_finder import (
     client_from_settings as sf_client_from_settings,
 )
-from app.tools.retrieval import fetch_official_page, fetch_page
+from app.tools.retrieval import MIN_USABLE_BODY_CHARS, fetch_official_page, fetch_page
 from app.usecases.scholarship_finder import prompts
 from app.usecases.scholarship_finder.extraction import extract_candidate_facts
 from app.usecases.scholarship_finder.fact_matching import amounts_match, deadlines_match
@@ -140,10 +140,15 @@ async def fetch_source(state: ScholarshipState) -> ScholarshipState:
         page = await fetch_page(
             db, state["source_url"], state["approved_domains"], job_id=state["job_id"]
         )
+    usable = page.status_code == 200 and len(page.text.strip()) >= MIN_USABLE_BODY_CHARS
+    note = f"fetched source via {page.fetch_method} ({page.byte_length} bytes)"
+    if not usable:
+        note += " - not a usable page"
     return ScholarshipState(
         page_text=page.text,
         page_fetch_method=page.fetch_method,
-        notes=[f"fetched source via {page.fetch_method} ({page.byte_length} bytes)"],
+        page_usable=usable,
+        notes=[note],
     )
 
 
@@ -657,8 +662,30 @@ async def decide(state: ScholarshipState) -> ScholarshipState:
     asked to grade its own work could answer differently over identical
     evidence with nothing to point at.
     """
-    short_circuit = outcome_for_page_type(state.get("page_type", ""))
     candidates = _candidates(state)
+
+    # Before anything a model said. When neither fetcher returned a usable
+    # page there is no evidence either way, and the one outcome that must
+    # never be reachable from here is REJECT_RECOMMENDED - it means "the
+    # official page contradicts the claim", which is a statement about a
+    # page nobody managed to read.
+    #
+    # This is not hypothetical. A site answering bot mitigation with 202
+    # and a 200-byte body had that body classified `not_a_scholarship`,
+    # which short-circuited to REJECT_RECOMMENDED for ten real awards in a
+    # single batch. The classification was reasonable given its input; the
+    # mistake was asking at all.
+    if state.get("page_usable") is False:
+        for candidate in candidates:
+            candidate.outcome = AgentOutcome.MORE_EVIDENCE_REQUIRED.value
+            candidate.uncertainty_reasons.append("source page could not be retrieved")
+        return ScholarshipState(
+            candidates=_dump(candidates),
+            outcome=AgentOutcome.MORE_EVIDENCE_REQUIRED.value,
+            notes=["outcome MORE_EVIDENCE_REQUIRED (source page could not be retrieved)"],
+        )
+
+    short_circuit = outcome_for_page_type(state.get("page_type", ""))
 
     if short_circuit is not None:
         for candidate in candidates:

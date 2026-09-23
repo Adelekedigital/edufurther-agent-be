@@ -24,6 +24,12 @@ class ScholarshipState(WorkflowState, total=False):
     page_text: str
     page_fetch_method: str
     page_type: str
+    #: False when neither fetcher returned anything that could be a page -
+    #: a bot-mitigation interstitial, a redirect stub, an empty render.
+    #: Carried explicitly rather than re-derived from `page_text` length,
+    #: because the decision it drives must not depend on a threshold being
+    #: applied identically in two places.
+    page_usable: bool
 
     #: `Candidate.to_dict()` each. A list rather than a keyed map because
     #: order is meaningful on a list page - "the third award on the page"

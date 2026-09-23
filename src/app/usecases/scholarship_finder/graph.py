@@ -30,6 +30,19 @@ from app.usecases.scholarship_finder.state import ScholarshipState
 USE_CASE_ID = "scholarship_verification"
 
 
+def route_after_fetch(state: ScholarshipState) -> str:
+    """Skip classification when the fetch produced nothing to classify.
+
+    Saves a model call per unreadable page, and - far more importantly -
+    keeps a classification of bot-mitigation boilerplate out of the
+    decision entirely, rather than making `decide` responsible for
+    distrusting an answer it should never have asked for.
+    """
+    if state.get("page_usable") is False:
+        return "decide"
+    return "classify_page"
+
+
 def route_after_classification(state: ScholarshipState) -> str:
     page_type = state.get("page_type", "")
     if page_type == PageType.NOT_A_SCHOLARSHIP.value:
@@ -63,7 +76,11 @@ def build() -> StateGraph:
 
     graph.add_edge(START, "load_discovery")
     graph.add_edge("load_discovery", "fetch_source")
-    graph.add_edge("fetch_source", "classify_page")
+    graph.add_conditional_edges(
+        "fetch_source",
+        route_after_fetch,
+        {"classify_page": "classify_page", "decide": "decide"},
+    )
     graph.add_conditional_edges(
         "classify_page",
         route_after_classification,

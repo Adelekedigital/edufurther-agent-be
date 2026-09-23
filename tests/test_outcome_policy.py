@@ -294,3 +294,61 @@ def test_a_job_with_no_candidates_is_not_silently_fine():
 
 def test_auto_check_eligible_is_never_produced_by_an_empty_run():
     assert roll_up([]) is not AgentOutcome.AUTO_CHECK_ELIGIBLE
+
+
+# --- a page nobody could read -----------------------------------------
+
+
+async def test_an_unreadable_page_is_never_a_rejection():
+    """The defect this exists to prevent.
+
+    A site answering bot mitigation with `202 Accepted` and a 200-byte
+    body had that body classified `not_a_scholarship`, which short-
+    circuited to REJECT_RECOMMENDED - the outcome that means "the official
+    page contradicts the claim" - for ten real awards in one batch.
+
+    REJECT_RECOMMENDED asserts evidence *against* a claim. An empty fetch
+    is not evidence of anything.
+    """
+    from app.usecases.scholarship_finder.nodes import decide
+
+    result = await decide(
+        {
+            "job_id": "job-1",
+            "page_usable": False,
+            "page_type": "not_a_scholarship",
+            "candidates": [],
+        }
+    )
+
+    assert result["outcome"] == "MORE_EVIDENCE_REQUIRED"
+    assert "could not be retrieved" in result["notes"][0]
+
+
+async def test_a_readable_page_still_short_circuits_on_page_type():
+    """The existing behaviour has to survive: a page that genuinely holds
+    no award should still say so rather than ask for more evidence."""
+    from app.usecases.scholarship_finder.nodes import decide
+
+    result = await decide(
+        {
+            "job_id": "job-2",
+            "page_usable": True,
+            "page_type": "not_a_scholarship",
+            "candidates": [],
+        }
+    )
+
+    assert result["outcome"] == "REJECT_RECOMMENDED"
+
+
+def test_an_unusable_page_routes_around_the_model():
+    """Cheaper, and it keeps a classification of boilerplate out of the
+    decision rather than making `decide` distrust it afterwards."""
+    from app.usecases.scholarship_finder.graph import route_after_fetch
+
+    assert route_after_fetch({"page_usable": False}) == "decide"
+    assert route_after_fetch({"page_usable": True}) == "classify_page"
+    # Absent means older checkpoints, which predate the flag: classify, as
+    # they always did, rather than silently changing their outcome on resume.
+    assert route_after_fetch({}) == "classify_page"
