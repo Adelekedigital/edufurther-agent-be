@@ -41,12 +41,18 @@ logger = logging.getLogger("app.tools.retrieval")
 #: strength of it. Status codes alone do not catch this, because none of
 #: those responses is an error.
 #:
-#: Set low on purpose. The stub that prompted this extracted to a couple
-#: of dozen characters, so 200 catches it many times over while leaving
-#: room for a legitimately terse page - an official award page that is
-#: mostly a table, say. Raising it trades a rarer miss for a commoner
-#: needless Jina call, and the budget is only 500 a month.
-MIN_USABLE_TEXT_CHARS = 200
+#: Below this many characters of *raw body*, a 2xx response is treated as
+#: a failed fetch rather than as content.
+#:
+#: Measured against `FetchedSource.text`, which is `content.decode()` - the
+#: whole body, markup included, not extracted prose. An earlier version of
+#: this set the bar at 200 while reasoning about extracted text, and a
+#: 208-byte bot-mitigation body cleared it by eight characters.
+#:
+#: 1500 is comfortably below any real page - the one that prompted this is
+#: 493,000 bytes - and comfortably above a redirect stub, a challenge
+#: interstitial or a cookie wall.
+MIN_USABLE_BODY_CHARS = 1_500
 
 FetchMethod = Literal["direct", "jina"]
 
@@ -160,12 +166,17 @@ async def fetch_page(
                 raise
             record.response_meta = fallback.response_meta
             return fallback
-        if page.status_code >= 400:
+        # Anything but 200 is not a page. 202 in particular is what bot
+        # mitigation returns while it decides about you - not an error, not
+        # a redirect, and invisible to a `>= 400` check, which is how a
+        # 208-byte challenge body reached a model as though it were a
+        # scholarship listing.
+        if page.status_code != 200:
             fallback = await _try_jina(db, validated, reason=f"status {page.status_code}")
             if fallback is not None:
                 record.response_meta = fallback.response_meta
                 return fallback
-        elif len(page.text.strip()) < MIN_USABLE_TEXT_CHARS:
+        elif len(page.text.strip()) < MIN_USABLE_BODY_CHARS:
             # A successful response carrying no usable page. Jina renders
             # from its own infrastructure, so it often gets the content
             # where a plain fetch got an interstitial.
@@ -214,7 +225,7 @@ async def fetch_official_page(
         )
 
         page = await _try_jina(db, validated, reason="official page verification")
-        if page is not None and len(page.text.strip()) < MIN_USABLE_TEXT_CHARS:
+        if page is not None and len(page.text.strip()) < MIN_USABLE_BODY_CHARS:
             # Same reasoning as fetch_page, in the opposite order: an empty
             # render is worse input for fact extraction than raw HTML.
             logger.info("thin_jina_body", extra={"url": validated})

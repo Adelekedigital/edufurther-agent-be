@@ -19,6 +19,16 @@ from tests.conftest import requires_db
 
 pytestmark = requires_db
 
+
+def a_real_page(marker: str = "page content") -> str:
+    """Unambiguously a page.
+
+    Tests about which fetcher gets chosen should not also be tests of
+    the thin-body threshold; three of them broke twice when it moved.
+    """
+    return "<html><body>" + ((marker + " ") * 200) + "</body></html>"
+
+
 APPROVED = ["example.test"]
 
 
@@ -63,14 +73,14 @@ async def session():
 
 
 async def test_fetch_page_uses_the_direct_fetcher_when_it_works(monkeypatch):
-    mock_direct(monkeypatch, lambda r: httpx.Response(200, text="direct html " * 40))
+    mock_direct(monkeypatch, lambda r: httpx.Response(200, text=a_real_page("direct html")))
     jina_calls = mock_jina(monkeypatch)
 
     async with get_sessionmaker()() as db:
         page = await fetch_page(db, "https://example.test/award", APPROVED)
 
     assert page.fetch_method == "direct"
-    assert page.text.startswith("direct html")
+    assert "direct html" in page.text
     assert jina_calls == [], "Jina was called when the direct fetch succeeded"
 
 
@@ -156,7 +166,7 @@ async def test_official_page_prefers_jina_for_clean_text(monkeypatch):
     mock_direct(monkeypatch, lambda r: httpx.Response(200, text="<html>raw</html>"))
     # Long enough to read as a page: a near-empty render now counts as a
     # failed fetch, so a token body would fall through to direct.
-    mock_jina(monkeypatch, text="# Award\n\nDeadline: 1 March\n\n" + "eligibility detail " * 20)
+    mock_jina(monkeypatch, text="# Award\n\nDeadline: 1 March\n\n" + "eligibility detail " * 120)
 
     async with get_sessionmaker()() as db:
         page = await fetch_official_page(db, "https://example.test/award", APPROVED)
@@ -315,7 +325,7 @@ async def test_the_open_ended_mode_still_refuses_a_private_host(monkeypatch):
 async def test_the_open_ended_mode_accepts_an_off_domain_official_page(monkeypatch):
     """The reason the mode exists: an award's official page lives on the
     provider's domain, not the aggregator's."""
-    mock_jina(monkeypatch, text="# Award\n\n" + "award detail " * 20)
+    mock_jina(monkeypatch, text="# Award\n\n" + "award detail " * 150)
 
     async with get_sessionmaker()() as db:
         page = await fetch_official_page(
@@ -386,3 +396,35 @@ async def test_a_thin_jina_render_falls_back_to_direct_for_official_pages(monkey
 
     assert page.fetch_method == "direct"
     assert "award detail" in page.text
+
+
+async def test_a_202_is_not_treated_as_a_page(monkeypatch):
+    """What bot mitigation actually returned in production.
+
+    202 Accepted is neither an error nor a redirect, so a `>= 400` check
+    and the redirect handler both pass it straight through. A 208-byte
+    challenge body then reached the model as though it were the page, and
+    the workflow rejected a real award on the strength of it.
+    """
+    mock_direct(monkeypatch, lambda r: httpx.Response(202, text="<html>checking…</html>"))
+    jina_calls = mock_jina(monkeypatch, text="# Real award\n\n" + "actual content " * 60)
+
+    async with get_sessionmaker()() as db:
+        page = await fetch_page(db, "https://example.test/award", APPROVED)
+
+    assert page.fetch_method == "jina"
+    assert jina_calls, "a non-200 response must not be accepted as content"
+
+
+async def test_a_body_too_small_to_be_a_page_falls_back_even_on_200(monkeypatch):
+    """The threshold measures the raw body, markup included - `text` is
+    `content.decode()`. Set against extracted prose instead, a 208-byte
+    challenge page cleared a 200-character bar by eight characters."""
+    mock_direct(monkeypatch, lambda r: httpx.Response(200, text="<html>" + ("x" * 300) + "</html>"))
+    jina_calls = mock_jina(monkeypatch, text="# Real award\n\n" + "actual content " * 60)
+
+    async with get_sessionmaker()() as db:
+        page = await fetch_page(db, "https://example.test/award", APPROVED)
+
+    assert page.fetch_method == "jina"
+    assert jina_calls
