@@ -63,14 +63,14 @@ async def session():
 
 
 async def test_fetch_page_uses_the_direct_fetcher_when_it_works(monkeypatch):
-    mock_direct(monkeypatch, lambda r: httpx.Response(200, text="direct html"))
+    mock_direct(monkeypatch, lambda r: httpx.Response(200, text="direct html " * 40))
     jina_calls = mock_jina(monkeypatch)
 
     async with get_sessionmaker()() as db:
         page = await fetch_page(db, "https://example.test/award", APPROVED)
 
     assert page.fetch_method == "direct"
-    assert page.text == "direct html"
+    assert page.text.startswith("direct html")
     assert jina_calls == [], "Jina was called when the direct fetch succeeded"
 
 
@@ -154,7 +154,9 @@ async def test_official_page_prefers_jina_for_clean_text(monkeypatch):
     """Verification extracts facts from the text, and raw HTML is markedly
     worse input than rendered markdown."""
     mock_direct(monkeypatch, lambda r: httpx.Response(200, text="<html>raw</html>"))
-    mock_jina(monkeypatch, text="# Award\n\nDeadline: 1 March")
+    # Long enough to read as a page: a near-empty render now counts as a
+    # failed fetch, so a token body would fall through to direct.
+    mock_jina(monkeypatch, text="# Award\n\nDeadline: 1 March\n\n" + "eligibility detail " * 20)
 
     async with get_sessionmaker()() as db:
         page = await fetch_official_page(db, "https://example.test/award", APPROVED)
@@ -313,7 +315,7 @@ async def test_the_open_ended_mode_still_refuses_a_private_host(monkeypatch):
 async def test_the_open_ended_mode_accepts_an_off_domain_official_page(monkeypatch):
     """The reason the mode exists: an award's official page lives on the
     provider's domain, not the aggregator's."""
-    mock_jina(monkeypatch, text="# Award")
+    mock_jina(monkeypatch, text="# Award\n\n" + "award detail " * 20)
 
     async with get_sessionmaker()() as db:
         page = await fetch_official_page(
@@ -321,3 +323,66 @@ async def test_the_open_ended_mode_accepts_an_off_domain_official_page(monkeypat
         )
 
     assert page.fetch_method == "jina"
+
+
+# --- a successful response carrying no page ----------------------------
+
+
+async def test_a_thin_direct_body_falls_back_to_jina(monkeypatch):
+    """The failure that rejected a real scholarship on no evidence.
+
+    A 301 stub is a valid 200 once followed wrongly - a couple of hundred
+    bytes of boilerplate, no error status, nothing for a status check to
+    catch. It reached the model, which reasonably called it
+    `not_a_scholarship`, and the workflow turned that into a
+    REJECT_RECOMMENDED against a real award.
+    """
+    mock_direct(monkeypatch, lambda r: httpx.Response(200, text="<html><body>Moved</body></html>"))
+    jina_calls = mock_jina(monkeypatch, text="# Real award\n\n" + "actual content " * 40)
+
+    async with get_sessionmaker()() as db:
+        page = await fetch_page(db, "https://example.test/award", APPROVED)
+
+    assert page.fetch_method == "jina"
+    assert "actual content" in page.text
+    assert jina_calls, "a body too small to be a page must trigger the fallback"
+
+
+async def test_a_thin_body_keeps_the_direct_result_when_jina_does_no_better(monkeypatch):
+    """Swapping one empty page for another would spend quota and obscure
+    which fetcher was used, so the fallback has to actually improve on it."""
+    mock_direct(monkeypatch, lambda r: httpx.Response(200, text="<html><body>Moved</body></html>"))
+    mock_jina(monkeypatch, text="also nothing")
+
+    async with get_sessionmaker()() as db:
+        page = await fetch_page(db, "https://example.test/award", APPROVED)
+
+    assert page.fetch_method == "direct"
+
+
+async def test_a_full_page_never_triggers_the_fallback(monkeypatch):
+    """The guard must not fire on ordinary pages - that would put every
+    fetch through Jina and exhaust a 500-a-month budget in a day."""
+    body = "<html>" + ("x" * 5_000) + "</html>"
+    mock_direct(monkeypatch, lambda r: httpx.Response(200, text=body))
+    jina_calls = mock_jina(monkeypatch)
+
+    async with get_sessionmaker()() as db:
+        page = await fetch_page(db, "https://example.test/award", APPROVED)
+
+    assert page.fetch_method == "direct"
+    assert jina_calls == []
+
+
+async def test_a_thin_jina_render_falls_back_to_direct_for_official_pages(monkeypatch):
+    """The mirror case: an empty render is worse input for fact extraction
+    than raw HTML, so the official-page path has to reverse too."""
+    body = "<html>" + ("award detail " * 40) + "</html>"
+    mock_direct(monkeypatch, lambda r: httpx.Response(200, text=body))
+    mock_jina(monkeypatch, text="# ")
+
+    async with get_sessionmaker()() as db:
+        page = await fetch_official_page(db, "https://example.test/award", APPROVED)
+
+    assert page.fetch_method == "direct"
+    assert "award detail" in page.text

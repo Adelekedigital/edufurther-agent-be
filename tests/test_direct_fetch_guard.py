@@ -281,3 +281,88 @@ async def test_the_user_agent_identifies_this_service(public_dns, monkeypatch):
     await fetch_source("https://example.test/award", APPROVED)
 
     assert seen["ua"] == "EdufurtherAgent/0.1"
+
+
+# --- redirect to a trailing slash --------------------------------------
+
+
+def test_a_trailing_slash_redirect_does_not_canonicalize_back_to_the_first_hop():
+    """The loop that rejected a real scholarship on no evidence.
+
+    `canonicalize_url` strips a trailing slash because it computes
+    identity, where `/a` and `/a/` are one page. A site that 301s `/a` to
+    `/a/` - the WordPress default - therefore sent hop two straight back to
+    hop one, and with a single hop allowed the caller got the redirect stub
+    as though it were the page.
+    """
+    from app.tools.direct_fetch import validate_source_url
+
+    first = validate_source_url("https://example.org/award", ["example.org"])
+    second = validate_source_url("https://example.org/award/", ["example.org"])
+
+    assert first != second, "the second hop must not resolve back to the first"
+    assert second.endswith("/award/")
+
+
+def test_canonicalization_still_applies_everything_except_the_slash():
+    """The fix restores one character, not the whole canonicalizer."""
+    from app.tools.direct_fetch import validate_source_url
+
+    result = validate_source_url("https://EXAMPLE.org/Award/?utm_source=x&keep=1", ["example.org"])
+
+    assert result.startswith("https://example.org/")  # host lowercased
+    assert "utm_source" not in result  # tracking dropped
+    assert "keep=1" in result  # real query kept
+    assert result.split("?")[0].endswith("/Award/")  # slash preserved
+
+
+@pytest.mark.parametrize("url", ["https://example.org", "https://example.org/"])
+def test_a_bare_host_is_unaffected(url):
+    """`/` is already the canonical root; nothing to restore or double."""
+    from app.tools.direct_fetch import validate_source_url
+
+    assert validate_source_url(url, ["example.org"]) in {
+        "https://example.org/",
+        "https://example.org",
+    }
+
+
+async def test_a_redirect_to_a_trailing_slash_reaches_the_real_page():
+    """End to end over a transport: 301 to `/a/`, then the actual body.
+
+    Before the fix this returned the 207-byte stub with status 200, which
+    no fallback could detect because it is a perfectly valid response.
+    """
+    import httpx
+
+    from app.tools import direct_fetch as df
+
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(str(request.url))
+        if request.url.path == "/award":
+            return httpx.Response(
+                301,
+                headers={"location": "https://example.org/award/"},
+                html="<html><body>Moved</body></html>",
+            )
+        return httpx.Response(200, html="<html><body>" + ("real content " * 60) + "</body></html>")
+
+    transport = httpx.MockTransport(handler)
+    original = httpx.AsyncClient
+
+    class _Client(original):  # type: ignore[misc,valid-type]
+        def __init__(self, *args, **kwargs):
+            kwargs["transport"] = transport
+            super().__init__(*args, **kwargs)
+
+    df.httpx.AsyncClient = _Client  # type: ignore[misc]
+    try:
+        fetched = await df.fetch_source("https://example.org/award", ["example.org"])
+    finally:
+        df.httpx.AsyncClient = original  # type: ignore[misc]
+
+    assert seen == ["https://example.org/award", "https://example.org/award/"]
+    assert fetched.status_code == 200
+    assert "real content" in fetched.text

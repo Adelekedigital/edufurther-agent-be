@@ -31,6 +31,23 @@ from app.tools.jina import fetch_via_jina
 
 logger = logging.getLogger("app.tools.retrieval")
 
+#: Below this many characters of extracted text, a 200 response is treated
+#: as a failed fetch rather than as content.
+#:
+#: A redirect stub, a bot-block interstitial and a cookie wall are all
+#: valid 200s carrying no page. Nothing downstream can tell the difference:
+#: a model handed 207 bytes of redirect boilerplate classified it as
+#: `not_a_scholarship` and the workflow rejected a real award on the
+#: strength of it. Status codes alone do not catch this, because none of
+#: those responses is an error.
+#:
+#: Set low on purpose. The stub that prompted this extracted to a couple
+#: of dozen characters, so 200 catches it many times over while leaving
+#: room for a legitimately terse page - an official award page that is
+#: mostly a table, say. Raising it trades a rarer miss for a commoner
+#: needless Jina call, and the budget is only 500 a month.
+MIN_USABLE_TEXT_CHARS = 200
+
 FetchMethod = Literal["direct", "jina"]
 
 
@@ -148,6 +165,23 @@ async def fetch_page(
             if fallback is not None:
                 record.response_meta = fallback.response_meta
                 return fallback
+        elif len(page.text.strip()) < MIN_USABLE_TEXT_CHARS:
+            # A successful response carrying no usable page. Jina renders
+            # from its own infrastructure, so it often gets the content
+            # where a plain fetch got an interstitial.
+            logger.info(
+                "thin_direct_body",
+                extra={"url": validated, "chars": len(page.text.strip())},
+            )
+            fallback = await _try_jina(
+                db, validated, reason=f"thin body ({len(page.text.strip())} chars)"
+            )
+            # Only if it actually did better. Jina can return the same
+            # nothing, and swapping one empty page for another would just
+            # spend quota and obscure which fetcher was used.
+            if fallback is not None and len(fallback.text.strip()) > len(page.text.strip()):
+                record.response_meta = fallback.response_meta
+                return fallback
         record.response_meta = page.response_meta
         return page
 
@@ -180,6 +214,11 @@ async def fetch_official_page(
         )
 
         page = await _try_jina(db, validated, reason="official page verification")
+        if page is not None and len(page.text.strip()) < MIN_USABLE_TEXT_CHARS:
+            # Same reasoning as fetch_page, in the opposite order: an empty
+            # render is worse input for fact extraction than raw HTML.
+            logger.info("thin_jina_body", extra={"url": validated})
+            page = None
         if page is None:
             page = await _direct(
                 validated, approved_domains, allow_any_public_domain=allow_any_public_domain

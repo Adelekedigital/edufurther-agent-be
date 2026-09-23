@@ -22,7 +22,7 @@ already been downloaded.
 import ipaddress
 import socket
 from dataclasses import dataclass
-from urllib.parse import urljoin, urlsplit
+from urllib.parse import urljoin, urlsplit, urlunsplit
 
 import httpx
 
@@ -98,7 +98,41 @@ def validate_source_url(
             raise ValueError("Source URL domain is not approved")
     if not _is_public_host(hostname):
         raise ValueError("Private or reserved source host is not allowed")
-    return normalized
+    return _restore_trailing_slash(url, normalized)
+
+
+def _restore_trailing_slash(original: str, normalized: str) -> str:
+    """Put back a trailing slash the canonicalizer removed.
+
+    `canonicalize_url` strips it because it computes *identity*, where
+    `/a` and `/a/` are one page - and it is ported verbatim from the
+    product so the two services agree about that. But identity is not a
+    fetch target. A site that 301s `/a` to `/a/` - the WordPress default,
+    so a large share of the web - sent us into a loop: hop one redirects,
+    hop two is canonicalized straight back to hop one, and with a single
+    hop allowed the caller receives the redirect stub as though it were
+    the page.
+
+    That failed silently and expensively. A 207-byte stub is a valid
+    200 response, so no fallback engaged, and the model dutifully
+    classified the boilerplate as `not_a_scholarship` - turning a real
+    scholarship into a REJECT_RECOMMENDED backed by no evidence at all.
+
+    Only the trailing slash is restored. Everything else canonicalization
+    does - lowercasing the host, dropping tracking parameters, rejecting
+    non-HTTP schemes - is left in place, and all of it happens before any
+    safety check, so this cannot widen what is reachable: the host is
+    unchanged and a trailing slash cannot move a URL to another origin.
+    """
+    # The *path* is what carries the slash. Testing the whole string misses
+    # `/award/?utm_source=x`, where the slash is followed by a query - and
+    # a tracking parameter on a redirect target is entirely ordinary.
+    if not urlsplit(original.strip()).path.endswith("/"):
+        return normalized
+    scheme, netloc, path, query, fragment = urlsplit(normalized)
+    if not path or path == "/" or path.endswith("/"):
+        return normalized
+    return urlunsplit((scheme, netloc, path + "/", query, fragment))
 
 
 async def fetch_source(
