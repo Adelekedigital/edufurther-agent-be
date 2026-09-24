@@ -133,7 +133,7 @@ quarters of what lands gives the reviewer no more than they had. **The agent
 would be adding to the backlog it was built to drain.**
 
 The cause is known, and the build plan states it as a Phase 1 limitation:
-`find_official_source` has no search tool. It works from links on the source
+`find_official_source` had no search tool when these records were processed. It works from links on the source
 page, the candidate's own URL, and the provider's `approved_domains` — so on a
 roundup that names awards in prose without linking them, it finds nothing. The
 25.7% official-source rate is that limitation, measured.
@@ -188,10 +188,15 @@ the field.
    thing that has changed, not the record count.
 2. **Fix the provenance gap** before any further evaluation, so the next one is
    not run on unattributable data. Small and well understood.
-3. **Then Phase 2's Tavily-backed `find_official_source`.** It attacks the
-   25.7% directly and is the only change that moves "bare" into "corroborated".
-   Re-run this evaluation afterwards, on the same records, and compare like for
-   like.
+3. **Then give `find_official_source` a search tool.** It attacks the 25.7%
+   directly and is the only change that moves "bare" into "corroborated".
+
+   *Done, after this report: see `official_source.py`.* The plan named Tavily;
+   Jina turned out to sell search on the key we already hold, so it needed no
+   new vendor. Replayed against these same 101 candidates the rate goes
+   **25.7% → 65.3%**, 40 of the 75 bare candidates given a page. That is reach,
+   not corroboration: whether those pages agree with the claims is what the
+   next run measures, and this report's other numbers stand until it does.
 4. **Build the §16 fixture set** with human labels. Without it, accuracy,
    precision and recall stay unmeasured however many records are processed.
 
