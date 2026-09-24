@@ -521,33 +521,19 @@ async def compare_evidence(state: ScholarshipState) -> ScholarshipState:
             continue
 
         official_facts = extract_candidate_facts(candidate.title, official_text)
-        candidate.amount_agrees = _agreement(
-            candidate.deterministic_facts.get("funding_mentions"),
-            official_facts.get("funding_mentions"),
-        )
-        candidate.deadline_agrees = _agreement(
-            candidate.deterministic_facts.get("deadline_mentions"),
-            official_facts.get("deadline_mentions"),
-            comparator=deadlines_match,
-        )
-        corroborated = (
-            ("funding.amount", candidate.amount_agrees, official_facts.get("funding_mentions")),
-            ("deadline.date", candidate.deadline_agrees, official_facts.get("deadline_mentions")),
-        )
-        for claim, agrees, mentions in corroborated:
-            value = _first(mentions)
-            if agrees and value:
-                candidate.evidence.append(
-                    Evidence(
-                        claim_path=claim,
-                        value=value,
-                        source_url=candidate.official_url or "",
-                        source_type=SourceType.OFFICIAL_PAGE.value,
-                        observed_at=_now(),
-                        fetch_method=candidate.official_fetch_method,
-                        confidence="explicit",
-                    ).to_dict()
-                )
+        model_pairs: dict[str, tuple[str | None, str | None]] = {}
+        deterministic = {
+            "funding.amount": (
+                _first(candidate.deterministic_facts.get("funding_mentions")),
+                _first(official_facts.get("funding_mentions")),
+                amounts_match,
+            ),
+            "deadline.date": (
+                _first(candidate.deterministic_facts.get("deadline_mentions")),
+                _first(official_facts.get("deadline_mentions")),
+                deadlines_match,
+            ),
+        }
 
         try:
             response = await _ask(
@@ -564,6 +550,7 @@ async def compare_evidence(state: ScholarshipState) -> ScholarshipState:
             )
         except AIRouterError as exc:
             candidate.uncertainty_reasons.append(f"evidence comparison failed: {exc}")
+            _settle_agreement(candidate, deterministic, model_pairs)
             continue
         if response.completed and response.output:
             # Recorded, but note what it does not do: a model-reported
@@ -573,7 +560,99 @@ async def compare_evidence(state: ScholarshipState) -> ScholarshipState:
                 str(item) for item in (response.output.get("contradictions") or [])
             ]
             candidate.prompt_versions["compare"] = response.prompt_version or ""
+            model_pairs = _model_value_pairs(response.output)
+
+        _settle_agreement(candidate, deterministic, model_pairs)
     return ScholarshipState(candidates=_dump(candidates))
+
+
+def _model_value_pairs(output: dict[str, Any]) -> dict[str, tuple[str | None, str | None]]:
+    """The (reported, official) strings the model located, per claim.
+
+    Only the strings. The `relationship` it also returns is deliberately
+    ignored for the verdict: deciding whether two values agree is the one
+    judgement this workflow never delegates, because a model asked to grade
+    its own extraction can answer differently over identical evidence with
+    nothing to point at.
+    """
+    pairs: dict[str, tuple[str | None, str | None]] = {}
+    for item in output.get("comparisons") or []:
+        if not isinstance(item, dict):
+            continue
+        claim = str(item.get("claim_path") or "")
+        if not claim:
+            continue
+        reported, official = item.get("reported_value"), item.get("official_value")
+        pairs[claim] = (
+            str(reported) if isinstance(reported, str | int | float) else None,
+            str(official) if isinstance(official, str | int | float) else None,
+        )
+    return pairs
+
+
+def _settle_agreement(
+    candidate: Candidate,
+    deterministic: dict[str, tuple[Any, Any, Any]],
+    model_pairs: dict[str, tuple[str | None, str | None]],
+) -> None:
+    """Decide agreement per claim, preferring deterministically read values.
+
+    The deterministic extractor is ported verbatim from the product so the
+    two services agree about identity, and it is narrow: `parse_amount`
+    reads currency symbols but not ISO codes, so "EUR 992" and
+    "GBP 10,000" - which is how most of the official pages we actually
+    fetch write it - yield nothing at all. Sixteen grade-A records in a
+    row reached the official page, read it successfully, and reported "no
+    evidence for funding" about text that plainly stated the funding.
+
+    So where deterministic extraction found a value on both sides, it
+    still decides. Where it did not, the *model's* located strings are
+    used as the values - and the comparison itself is still made here, by
+    `fact_matching`, never by the model.
+
+    Evidence recorded from model-located values is marked
+    `model_extracted` rather than `explicit`. The two are not equally
+    strong, and a reviewer reading the row months from now has no other
+    way to tell them apart - the same reason the product keeps
+    `extracted_facts` and `ai_extracted_facts` separate instead of merging
+    them.
+    """
+
+    def compare(a: str | None, b: str | None, comparator: Any) -> bool | None:
+        # Passed in rather than closed over: taking it from the enclosing
+        # loop works only by late binding, which is a quiet way to compare
+        # one claim with another claim's comparator.
+        #
+        # And not via `_first`, which stringifies: `_first([None])` is the
+        # string "None", so two of those read as present values that happen
+        # to be equal rather than as nothing to compare.
+        if a is None or b is None:
+            return None
+        return comparator(a, b)
+
+    verdicts: dict[str, bool | None] = {}
+    for claim, (reported, official, comparator) in deterministic.items():
+        agrees = compare(reported, official, comparator)
+        value, confidence = official, "explicit"
+        if agrees is None:
+            model_reported, model_official = model_pairs.get(claim, (None, None))
+            agrees = compare(model_reported, model_official, comparator)
+            value, confidence = model_official, "model_extracted"
+        verdicts[claim] = agrees
+        if agrees and value:
+            candidate.evidence.append(
+                Evidence(
+                    claim_path=claim,
+                    value=value,
+                    source_url=candidate.official_url or "",
+                    source_type=SourceType.OFFICIAL_PAGE.value,
+                    observed_at=_now(),
+                    fetch_method=candidate.official_fetch_method,
+                    confidence=confidence,
+                ).to_dict()
+            )
+    candidate.amount_agrees = verdicts.get("funding.amount")
+    candidate.deadline_agrees = verdicts.get("deadline.date")
 
 
 def _agreement(reported: Any, official: Any, comparator=amounts_match) -> bool | None:

@@ -388,3 +388,108 @@ def test_two_present_values_are_still_compared():
     # value it cannot parse is not a comparison it can make.
     assert _agreement(["$10,000"], ["$10,000"]) is True
     assert _agreement(["$10,000"], ["$50,000"]) is False
+
+
+# --- model-located values, deterministically compared -------------------
+
+
+def _candidate():
+    from app.usecases.scholarship_finder.schemas import Candidate
+
+    return Candidate(
+        title="Award",
+        url="https://x.test/a",
+        excerpt="",
+        identity_key="award",
+        parent_source_url="https://x.test/",
+        parent_discovery_id="d-1",
+    )
+
+
+def test_model_values_are_used_only_where_deterministic_extraction_found_none():
+    """`parse_amount` reads symbols but not ISO codes, so "EUR 992" - how
+    most official pages we fetch actually write it - extracts to nothing.
+    Sixteen grade-A records reported "no evidence for funding" about pages
+    that plainly stated the funding."""
+    from app.usecases.scholarship_finder.fact_matching import amounts_match
+    from app.usecases.scholarship_finder.nodes import _settle_agreement
+
+    c = _candidate()
+    _settle_agreement(
+        c,
+        {"funding.amount": (None, None, amounts_match)},
+        {"funding.amount": ("EUR 992", "EUR 992")},
+    )
+
+    assert c.amount_agrees is True
+    assert c.evidence[0]["confidence"] == "model_extracted"
+
+
+def test_deterministic_values_win_when_present():
+    from app.usecases.scholarship_finder.fact_matching import amounts_match
+    from app.usecases.scholarship_finder.nodes import _settle_agreement
+
+    c = _candidate()
+    _settle_agreement(
+        c,
+        {"funding.amount": ("$10,000", "$10,000", amounts_match)},
+        # A model disagreeing must not override a value we read ourselves.
+        {"funding.amount": ("$10,000", "$99,999")},
+    )
+
+    assert c.amount_agrees is True
+    assert c.evidence[0]["confidence"] == "explicit"
+
+
+def test_the_model_never_decides_agreement():
+    """It supplies the two strings; `fact_matching` compares them. Two
+    different amounts must not corroborate however the model labelled the
+    relationship."""
+    from app.usecases.scholarship_finder.fact_matching import amounts_match
+    from app.usecases.scholarship_finder.nodes import _settle_agreement
+
+    c = _candidate()
+    _settle_agreement(
+        c,
+        {"funding.amount": (None, None, amounts_match)},
+        {"funding.amount": ("$10,000", "$50,000")},
+    )
+
+    assert c.amount_agrees is False
+    assert c.evidence == []
+
+
+def test_a_claim_the_model_also_could_not_find_stays_unknown():
+    from app.usecases.scholarship_finder.fact_matching import deadlines_match
+    from app.usecases.scholarship_finder.nodes import _settle_agreement
+
+    c = _candidate()
+    _settle_agreement(c, {"deadline.date": (None, None, deadlines_match)}, {})
+
+    assert c.deadline_agrees is None
+    assert c.evidence == []
+
+
+def test_only_the_strings_are_taken_from_the_model_output():
+    """`relationship` is ignored on purpose - a model grading its own
+    extraction can answer differently over identical evidence."""
+    from app.usecases.scholarship_finder.nodes import _model_value_pairs
+
+    pairs = _model_value_pairs(
+        {
+            "comparisons": [
+                {
+                    "claim_path": "funding.amount",
+                    "reported_value": "EUR 992",
+                    "official_value": "EUR 992",
+                    "relationship": "contradicted",
+                },
+                {"claim_path": "deadline.date", "reported_value": "1 June", "official_value": None},
+                {"no_claim_path": "ignored"},
+            ]
+        }
+    )
+
+    assert pairs["funding.amount"] == ("EUR 992", "EUR 992")
+    assert pairs["deadline.date"] == ("1 June", None)
+    assert len(pairs) == 2

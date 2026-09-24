@@ -91,12 +91,26 @@ def test_the_same_number_in_different_currencies_is_not_agreement():
     assert amounts_match("£10,000", "$10,000") is False
 
 
-@pytest.mark.parametrize("raw", ["ten thousand pounds", "10000", "£", "", "GBP 10,000"])
-def test_an_unparseable_amount_never_matches(raw):
-    """Unparseable is not agreement. Returning True here would let a
-    malformed figure corroborate anything."""
+@pytest.mark.parametrize("raw", ["ten thousand pounds", "10000", "£", ""])
+def test_an_unparseable_amount_is_not_agreement(raw):
+    """Unparseable is not agreement - but it is not disagreement either.
+
+    It returned False, which reads as "these differ", and False is what
+    drives REJECT_RECOMMENDED. None says what is actually true: there is
+    nothing here to compare.
+    """
     assert parse_amount(raw) is None
-    assert amounts_match(raw, raw) is False
+    assert amounts_match(raw, raw) is not True
+    assert amounts_match(raw, raw) is None
+
+
+@pytest.mark.parametrize("raw", ["GBP 10,000", "EUR 992", "10,000 GBP", "USD 5,000"])
+def test_an_iso_currency_code_is_now_readable(raw):
+    """Official pages overwhelmingly write "EUR 992", not "€992". Reading
+    symbols only meant sixteen grade-A records in a row reported "no
+    evidence for funding" about pages that stated the funding plainly."""
+    assert parse_amount(raw) is not None
+    assert amounts_match(raw, raw) is True
 
 
 # --- deadlines --------------------------------------------------------
@@ -121,10 +135,27 @@ def test_a_different_year_is_not_agreement():
     assert deadlines_match("March 15, 2026", "March 15, 2025") is False
 
 
-@pytest.mark.parametrize("raw", ["15/03/2026", "next spring", "soon", ""])
-def test_an_unparseable_deadline_never_matches(raw):
+@pytest.mark.parametrize("raw", ["next spring", "soon", "rolling", ""])
+def test_an_unparseable_deadline_is_not_agreement(raw):
+    """Same distinction as amounts: unreadable is not disagreement."""
     assert parse_deadline(raw) is None
-    assert deadlines_match(raw, raw) is False
+    assert deadlines_match(raw, raw) is None
+
+
+@pytest.mark.parametrize(
+    "raw", ["1 June 2026", "1 Jun 2026", "2026-06-01", "15/03/2026", "1st June 2026"]
+)
+def test_dates_written_the_other_way_round_are_now_readable(raw):
+    """`deadlines_match("1 June 2026", "1 June 2026")` returned False - two
+    identical strings called a contradiction, because only "June 1 2026"
+    ever parsed. That is a rejection waiting to happen."""
+    assert parse_deadline(raw) is not None
+    assert deadlines_match(raw, raw) is True
+
+
+def test_the_same_date_written_two_ways_agrees():
+    assert deadlines_match("1 June 2026", "June 1 2026") is True
+    assert deadlines_match("1 June 2026", "2026-06-01") is True
 
 
 # --- deterministic extraction ----------------------------------------
