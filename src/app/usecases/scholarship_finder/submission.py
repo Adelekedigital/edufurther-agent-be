@@ -131,6 +131,8 @@ async def submit_to_product(state: ScholarshipState) -> ScholarshipState:
         outcome=str(state.get("outcome") or AgentOutcome.MORE_EVIDENCE_REQUIRED.value),
         recommendation=_recommendation(state, candidates),
         notes=notes,
+        model=state.get("page_model"),
+        prompt_version=state.get("page_prompt_version"),
     )
 
     logger.info(
@@ -232,6 +234,7 @@ async def _record_candidate_run(
         },
         notes=notes,
         model=candidate.model,
+        prompt_version=candidate.prompt_versions.get("extract"),
     )
 
 
@@ -244,6 +247,7 @@ async def _record_run(
     recommendation: dict[str, Any],
     notes: list[str],
     model: str | None = None,
+    prompt_version: str | None = None,
 ) -> None:
     try:
         await client.record_run(
@@ -252,6 +256,7 @@ async def _record_run(
             agent_outcome=outcome,
             recommendation=recommendation,
             model=model,
+            prompt_version=prompt_version,
             correlation_id=state["correlation_id"],
         )
     except ScholarshipFinderError as exc:

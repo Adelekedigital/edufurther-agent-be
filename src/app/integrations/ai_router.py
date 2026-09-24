@@ -87,6 +87,13 @@ class AIRouterResponse:
     #: Persisted alongside any fact derived from this call, so a later
     #: accuracy regression can be traced to the prompt that produced it.
     prompt_version: str | None
+    #: Which model actually answered, after any fallback inside the router.
+    #: Not derivable from `model_policy_version`, which names the routing
+    #: policy rather than the model it selected - so a policy that falls
+    #: back reports the same version for two different models. Dropping
+    #: this field is what left `model` NULL in every row of both databases
+    #: through the whole Stage 1 pilot.
+    model: str | None
     trace_reference: str | None
 
     @property
@@ -198,6 +205,7 @@ class AIRouterClient:
             output=body.get("output"),
             model_policy_version=body.get("model_policy_version"),
             prompt_version=body.get("prompt_version"),
+            model=body.get("model"),
             trace_reference=body.get("trace_reference"),
         )
 
