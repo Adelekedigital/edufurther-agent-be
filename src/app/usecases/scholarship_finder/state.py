@@ -30,6 +30,12 @@ class ScholarshipState(WorkflowState, total=False):
     #: because the decision it drives must not depend on a threshold being
     #: applied identically in two places.
     page_usable: bool
+    #: Provenance for the page-level decision, which is classification.
+    #: A list page's own `agent_runs` row is about the page, not about any
+    #: one candidate, so it cannot borrow a candidate's attribution - and
+    #: an individual page has no split call to borrow from either.
+    page_model: str
+    page_prompt_version: str
 
     #: `Candidate.to_dict()` each. A list rather than a keyed map because
     #: order is meaningful on a list page - "the third award on the page"

@@ -58,7 +58,12 @@ extend-ignore = ["B008"]
 # which reads as a redefinition. The structurally correct fix is to move
 # the fixture into conftest.py; it pulls several fakes with it, so it is
 # left as a deliberate exemption rather than a rushed refactor.
+#
+# Two files now. A third is the point at which this stops being an
+# exemption and starts being the convention, and the move should happen
+# instead.
 "tests/test_acceptance_records.py" = ["F811"]
+"tests/test_provenance.py" = ["F811"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

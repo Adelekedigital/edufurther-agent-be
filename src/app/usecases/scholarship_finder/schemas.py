@@ -154,11 +154,35 @@ class Candidate:
     outcome: str | None = None
     uncertainty_reasons: list[str] = field(default_factory=list)
 
-    model: str | None = None
+    #: Keyed by task, because the router picks a model per call and may
+    #: fall back on one and not another - so "the model that produced this
+    #: candidate" is not a single answer. Written in step with
+    #: `prompt_versions`: a prompt version without the model that ran it
+    #: answers half the question, and the half it answers is the half that
+    #: rarely changes.
     prompt_versions: dict[str, str] = field(default_factory=dict)
+    models: dict[str, str] = field(default_factory=dict)
+
+    @property
+    def model(self) -> str | None:
+        """The one model name the product's single column should hold.
+
+        Extraction first, because the facts a row asserts are what a later
+        accuracy question is actually about - and it matches the existing
+        choice of `prompt_versions["extract"]` for the same columns. The
+        rest are a fallback so a candidate that never reached extraction
+        still attributes to something.
+        """
+        for task in ("extract", "compare", "eligibility", "split", "classify"):
+            if self.models.get(task):
+                return self.models[task]
+        return None
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        # `model` is derived, so `asdict` omits it. Added back because the
+        # dict form is what crosses into the checkpoint and the product,
+        # and a reader there should not have to know it is a property.
+        return asdict(self) | {"model": self.model}
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "Candidate":

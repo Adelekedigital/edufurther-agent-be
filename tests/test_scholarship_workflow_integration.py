@@ -40,13 +40,22 @@ def discovery(**overrides) -> dict[str, Any]:
     } | overrides
 
 
-def router_response(output: dict | None, *, outcome=AIRouterOutcome.completed) -> AIRouterResponse:
+def router_response(
+    output: dict | None,
+    *,
+    outcome=AIRouterOutcome.completed,
+    model: str | None = "claude-test-1",
+) -> AIRouterResponse:
+    # `model` is set by default so every test in the suite carries it. It
+    # was absent here while `prompt_version` was present, which is exactly
+    # the asymmetry that let the missing field reach production.
     return AIRouterResponse(
         request_id="req-1",
         outcome=outcome,
         output=output,
         model_policy_version="ai-policy-v1",
         prompt_version="task-v1",
+        model=model,
         trace_reference=None,
     )
 

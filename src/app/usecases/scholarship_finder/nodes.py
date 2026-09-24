@@ -85,6 +85,35 @@ def _dump(candidates: list[Candidate]) -> list[dict[str, Any]]:
     return [candidate.to_dict() for candidate in candidates]
 
 
+def _note_provenance(candidate: Candidate, task: str, response: AIRouterResponse) -> None:
+    """Record which prompt and which model produced this, as one act.
+
+    The two used to be separate assignments, and they drifted: all four
+    call sites set `prompt_versions` and none set the model, so `model`
+    was NULL in every row of both databases for the whole Stage 1 pilot
+    while `prompt_version` looked healthy. Writing them together is what
+    stops that recurring.
+    """
+    candidate.prompt_versions[task] = response.prompt_version or ""
+    if response.model:
+        candidate.models[task] = response.model
+
+
+def _page_provenance(response: AIRouterResponse) -> ScholarshipState:
+    """The same, for the page-level decision.
+
+    Returned on every branch of classification, including the two that
+    fall back to `individual`: a run that fell back because the model
+    failed is precisely the run someone will later want to attribute.
+    """
+    provenance: ScholarshipState = {}
+    if response.prompt_version:
+        provenance["page_prompt_version"] = response.prompt_version
+    if response.model:
+        provenance["page_model"] = response.model
+    return provenance
+
+
 async def _ask(
     client: AIRouterClient, task: AITask, *, state: ScholarshipState, key: str, source_data: dict
 ) -> AIRouterResponse:
@@ -193,7 +222,7 @@ async def classify_page(state: ScholarshipState) -> ScholarshipState:
             page_type=PageType.INDIVIDUAL.value,
             uncertainty_reasons=[f"page classification unavailable ({response.outcome.value})"],
             notes=["classification fell back to individual"],
-        )
+        ) | _page_provenance(response)
     page_type = str(response.output.get("page_type"))
     if page_type not in {member.value for member in PageType}:
         # Validated against the enum rather than trusted. An unrecognised
@@ -205,11 +234,11 @@ async def classify_page(state: ScholarshipState) -> ScholarshipState:
             page_type=PageType.INDIVIDUAL.value,
             uncertainty_reasons=[f"unrecognised page type {page_type!r}"],
             notes=["classification fell back to individual"],
-        )
+        ) | _page_provenance(response)
     return ScholarshipState(
         page_type=page_type,
         notes=[f"classified as {page_type}"],
-    )
+    ) | _page_provenance(response)
 
 
 # --- 4. split ----------------------------------------------------------
@@ -324,6 +353,7 @@ async def split_candidates(state: ScholarshipState) -> ScholarshipState:
             excerpt=item.get("excerpt"),
             heading=item.get("heading"),
             prompt_versions={"split": response.prompt_version or ""},
+            models={"split": response.model} if response.model else {},
         )
         for item in items
         if _strip_list_ordinal(str(item.get("title") or ""))
@@ -406,7 +436,7 @@ async def extract_facts(state: ScholarshipState) -> ScholarshipState:
             continue
         if response.completed and response.output:
             candidate.model_facts = response.output.get("candidate") or {}
-            candidate.prompt_versions["extract"] = response.prompt_version or ""
+            _note_provenance(candidate, "extract", response)
         else:
             candidate.uncertainty_reasons.append(
                 f"fact extraction unavailable ({response.outcome.value})"
@@ -626,7 +656,7 @@ async def compare_evidence(state: ScholarshipState) -> ScholarshipState:
             candidate.contradictions = [
                 str(item) for item in (response.output.get("contradictions") or [])
             ]
-            candidate.prompt_versions["compare"] = response.prompt_version or ""
+            _note_provenance(candidate, "compare", response)
             model_pairs = _model_value_pairs(response.output)
 
         _settle_agreement(candidate, deterministic, model_pairs)
@@ -822,7 +852,7 @@ async def extract_eligibility(state: ScholarshipState) -> ScholarshipState:
         candidate.eligibility_rules = [
             _rule(item, candidate) for item in (response.output.get("rules") or [])
         ]
-        candidate.prompt_versions["eligibility"] = response.prompt_version or ""
+        _note_provenance(candidate, "eligibility", response)
     return ScholarshipState(candidates=_dump(candidates))
 
 
