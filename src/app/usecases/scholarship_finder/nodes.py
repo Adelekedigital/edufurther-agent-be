@@ -398,6 +398,27 @@ def _registrable(host: str) -> str:
 AUTHORITATIVE_GRADES = frozenset({"A", "B"})
 
 
+def _same_page(a: str, b: str) -> bool:
+    """Same document, ignoring fragment and trailing-slash noise.
+
+    Query strings are significant: DAAD addresses every award through one
+    path with a `detail` parameter, so dropping the query would collapse
+    the whole database into a single page.
+    """
+    if not a or not b:
+        return False
+
+    def key(url: str) -> tuple[str, str, str]:
+        parts = urlsplit(url.strip())
+        return (
+            (parts.hostname or "").lower().removeprefix("www."),
+            parts.path.rstrip("/"),
+            parts.query,
+        )
+
+    return key(a) == key(b)
+
+
 async def find_official_source(state: ScholarshipState) -> ScholarshipState:
     """Identify each candidate's official page.
 
@@ -430,6 +451,22 @@ async def find_official_source(state: ScholarshipState) -> ScholarshipState:
             continue
         host = _registrable(urlsplit(candidate.url).hostname or "")
         if not host:
+            continue
+        # A page cannot corroborate itself. The same-domain rule exists to
+        # allow a provider's *other* page, not the identical one - and for
+        # a grade-A source whose discovery URL is already the award's page,
+        # the two are the same URL. Sixteen records in a row were checked
+        # against themselves, which then reported "the official page
+        # corroborates funding and deadline" about a single document
+        # agreeing with its own excerpt.
+        #
+        # Same reasoning the aggregator rule already states, one level up:
+        # a link to oneself is not a second source.
+        if _same_page(candidate.url, state["source_url"]):
+            candidate.uncertainty_reasons.append(
+                "the only candidate link is the discovery's own page, which cannot corroborate "
+                "itself"
+            )
             continue
         if host != parent_host or source_is_authoritative:
             candidate.official_url = candidate.url
@@ -524,13 +561,13 @@ async def compare_evidence(state: ScholarshipState) -> ScholarshipState:
         model_pairs: dict[str, tuple[str | None, str | None]] = {}
         deterministic = {
             "funding.amount": (
-                _first(candidate.deterministic_facts.get("funding_mentions")),
-                _first(official_facts.get("funding_mentions")),
+                _values(candidate.deterministic_facts.get("funding_mentions")),
+                _values(official_facts.get("funding_mentions")),
                 amounts_match,
             ),
             "deadline.date": (
-                _first(candidate.deterministic_facts.get("deadline_mentions")),
-                _first(official_facts.get("deadline_mentions")),
+                _values(candidate.deterministic_facts.get("deadline_mentions")),
+                _values(official_facts.get("deadline_mentions")),
                 deadlines_match,
             ),
         }
@@ -618,26 +655,18 @@ def _settle_agreement(
     them.
     """
 
-    def compare(a: str | None, b: str | None, comparator: Any) -> bool | None:
-        # Passed in rather than closed over: taking it from the enclosing
-        # loop works only by late binding, which is a quiet way to compare
-        # one claim with another claim's comparator.
-        #
-        # And not via `_first`, which stringifies: `_first([None])` is the
-        # string "None", so two of those read as present values that happen
-        # to be equal rather than as nothing to compare.
-        if a is None or b is None:
-            return None
-        return comparator(a, b)
-
     verdicts: dict[str, bool | None] = {}
     for claim, (reported, official, comparator) in deterministic.items():
-        agrees = compare(reported, official, comparator)
-        value, confidence = official, "explicit"
+        agrees, value = _compare_sets(reported, official, comparator)
+        confidence = "explicit"
         if agrees is None:
             model_reported, model_official = model_pairs.get(claim, (None, None))
-            agrees = compare(model_reported, model_official, comparator)
-            value, confidence = model_official, "model_extracted"
+            agrees, value = _compare_sets(
+                [model_reported] if model_reported else [],
+                [model_official] if model_official else [],
+                comparator,
+            )
+            confidence = "model_extracted"
         verdicts[claim] = agrees
         if agrees and value:
             candidate.evidence.append(
@@ -653,6 +682,50 @@ def _settle_agreement(
             )
     candidate.amount_agrees = verdicts.get("funding.amount")
     candidate.deadline_agrees = verdicts.get("deadline.date")
+
+
+def _values(mentions: Any) -> list[str]:
+    """Every distinct mention, in order. Previously only the first was kept."""
+    if not isinstance(mentions, list):
+        return []
+    seen: list[str] = []
+    for m in mentions:
+        s = str(m)
+        if s and s not in seen:
+            seen.append(s)
+    return seen
+
+
+def _compare_sets(
+    reported: list[str], official: list[str], comparator: Any
+) -> tuple[bool | None, str | None]:
+    """Agreement across two sets of values, and the value that carried it.
+
+    Only the *first* mention from each side used to be compared. A full
+    official page lists several figures - a monthly stipend, a travel
+    allowance, an insurance contribution - so first-against-first pairs two
+    numbers that were never about the same thing, and a mismatch there was
+    reported as "the official page states a different funding amount".
+    Four of five rejections in one batch came from that.
+
+    So: a claim is supported if it appears anywhere on the official page.
+    It is contradicted only when each side offers exactly one value and
+    they differ - the one case where we can be sure the two are about the
+    same thing. Anything else is ambiguous, and ambiguous is None, because
+    a rejection asserts the official page says otherwise and we would not
+    know that.
+    """
+    if not reported or not official:
+        return None, None
+    for r in reported:
+        for o in official:
+            if comparator(r, o) is True:
+                return True, o
+    if len(reported) == 1 and len(official) == 1:
+        # Both sides unambiguous and no match: a real contradiction, unless
+        # one of them simply could not be parsed.
+        return comparator(reported[0], official[0]), official[0]
+    return None, None
 
 
 def _agreement(reported: Any, official: Any, comparator=amounts_match) -> bool | None:

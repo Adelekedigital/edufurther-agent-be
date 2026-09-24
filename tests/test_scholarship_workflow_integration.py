@@ -318,10 +318,16 @@ async def test_a_missing_official_page_is_more_evidence_required(wire):
 
 async def test_a_conflicting_deadline_is_rejected(wire):
     """The candidate claims March, the official page says April. That is
-    not a gap in what we know."""
+    not a gap in what we know.
+
+    Driven through a list page, because that is the only shape with a
+    genuinely separate official page: an individual page's candidate URL
+    *is* the discovery URL, and a page cannot corroborate itself.
+    """
     wire(
         answers={
-            AITask.classify_source_page: {"page_type": "individual", "evidence": []},
+            AITask.classify_source_page: {"page_type": "list", "evidence": []},
+            AITask.split_list_candidates: split_output(1),
             AITask.extract_scholarship_facts: {"candidate": {}, "evidence": []},
             AITask.compare_official_evidence: {
                 "comparisons": [],
@@ -331,45 +337,62 @@ async def test_a_conflicting_deadline_is_rejected(wire):
             AITask.extract_eligibility_requirements: {"rules": [], "evidence": []},
         },
         record=discovery(
-            raw_title="Example Award",
-            raw_excerpt="Worth £5,000 closing March 1, 2026.",
-            source_url="https://provider.test/award",
-            approved_domains=["provider.test"],
+            raw_title="Top 10 Awards",
+            raw_excerpt="A list of awards.",
+            source_url=LIST_URL,
+            approved_domains=["aggregator.test"],
             authority_grade="A",
         ),
-        official="Worth £5,000 closing April 30, 2026.",
+        # The split candidate's excerpt says March 1; the official page says
+        # April 30. One value each side, so this is a real contradiction.
+        official="Worth £1,000 closing April 30, 2026.",
     )
 
     result = await run()
 
     candidate = result["candidates"][0]
     assert candidate["deadline_agrees"] is False
-    assert candidate["outcome"] == AgentOutcome.REJECT_RECOMMENDED.value
+    assert result["outcome"] == "REJECT_RECOMMENDED"
 
 
 async def test_agreement_is_decided_deterministically_not_by_the_model(wire):
     """The model is asked to locate passages. Whether two values agree is
     computed by fact_matching - asking a model would be asking it to
-    verify."""
+    verify.
+
+    Through a list page, so the candidate has an official page that is not
+    itself; the point under test is that the model's verdict is ignored.
+    """
     wire(
         answers={
-            AITask.classify_source_page: {"page_type": "individual", "evidence": []},
+            AITask.classify_source_page: {"page_type": "list", "evidence": []},
+            AITask.split_list_candidates: split_output(1),
             AITask.extract_scholarship_facts: {"candidate": {}, "evidence": []},
             # The model claims everything agrees. It does not get a vote.
             AITask.compare_official_evidence: {
-                "comparisons": [{"claim_path": "funding.amount", "relationship": "supported"}],
+                "comparisons": [
+                    {
+                        "claim_path": "funding.amount",
+                        "reported_value": "£1,000",
+                        "official_value": "£1,000",
+                        "relationship": "supported",
+                    }
+                ],
                 "contradictions": [],
                 "evidence": [],
             },
             AITask.extract_eligibility_requirements: {"rules": [], "evidence": []},
         },
         record=discovery(
-            raw_title="Example Award",
-            raw_excerpt="Worth £13,000 closing March 1, 2026.",
-            source_url="https://provider.test/award",
-            approved_domains=["provider.test"],
+            raw_title="Top 10 Awards",
+            raw_excerpt="A list of awards.",
+            source_url=LIST_URL,
+            approved_domains=["aggregator.test"],
             authority_grade="A",
         ),
+        # The split candidate claims £1,000; the official page says £16,750.
+        # The verification standard's own worst near-miss, and the model
+        # calling it "supported" must not change the answer.
         official="Worth £16,750 closing March 1, 2026.",
     )
 

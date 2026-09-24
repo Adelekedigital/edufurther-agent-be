@@ -417,7 +417,7 @@ def test_model_values_are_used_only_where_deterministic_extraction_found_none():
     c = _candidate()
     _settle_agreement(
         c,
-        {"funding.amount": (None, None, amounts_match)},
+        {"funding.amount": ([], [], amounts_match)},
         {"funding.amount": ("EUR 992", "EUR 992")},
     )
 
@@ -432,7 +432,7 @@ def test_deterministic_values_win_when_present():
     c = _candidate()
     _settle_agreement(
         c,
-        {"funding.amount": ("$10,000", "$10,000", amounts_match)},
+        {"funding.amount": (["$10,000"], ["$10,000"], amounts_match)},
         # A model disagreeing must not override a value we read ourselves.
         {"funding.amount": ("$10,000", "$99,999")},
     )
@@ -451,7 +451,7 @@ def test_the_model_never_decides_agreement():
     c = _candidate()
     _settle_agreement(
         c,
-        {"funding.amount": (None, None, amounts_match)},
+        {"funding.amount": ([], [], amounts_match)},
         {"funding.amount": ("$10,000", "$50,000")},
     )
 
@@ -464,7 +464,7 @@ def test_a_claim_the_model_also_could_not_find_stays_unknown():
     from app.usecases.scholarship_finder.nodes import _settle_agreement
 
     c = _candidate()
-    _settle_agreement(c, {"deadline.date": (None, None, deadlines_match)}, {})
+    _settle_agreement(c, {"deadline.date": ([], [], deadlines_match)}, {})
 
     assert c.deadline_agrees is None
     assert c.evidence == []
@@ -493,3 +493,64 @@ def test_only_the_strings_are_taken_from_the_model_output():
     assert pairs["funding.amount"] == ("EUR 992", "EUR 992")
     assert pairs["deadline.date"] == ("1 June", None)
     assert len(pairs) == 2
+
+
+# --- a page cannot corroborate itself -----------------------------------
+
+
+def test_the_discovery_s_own_page_is_not_corroboration():
+    """Sixteen grade-A records were verified against themselves. The
+    same-domain rule exists to allow a provider's *other* page; when the
+    discovery URL already is the award's page the two are identical, and
+    "the official page corroborates funding and deadline" then described
+    one document agreeing with its own excerpt."""
+    from app.usecases.scholarship_finder.nodes import _same_page
+
+    d = "https://www2.daad.de/db/21148-scholarship-database?detail=57378178"
+    assert _same_page(d, d) is True
+    assert _same_page("https://www.a.test/p/", "https://a.test/p") is True
+    # The query is significant: DAAD addresses every award through one path.
+    assert _same_page(d, d.replace("57378178", "50026200")) is False
+
+
+# --- ambiguous pairings are not contradictions --------------------------
+
+
+def test_a_claim_found_anywhere_on_the_official_page_is_supported():
+    from app.usecases.scholarship_finder.fact_matching import amounts_match
+    from app.usecases.scholarship_finder.nodes import _compare_sets
+
+    agrees, value = _compare_sets(["992 EUR"], ["GBP 5,000", "992 EUR"], amounts_match)
+
+    assert agrees is True
+    assert value == "992 EUR"
+
+
+def test_one_value_each_that_differ_is_a_real_contradiction():
+    """The fix must not make rejection unreachable - a genuine conflict is
+    what the outcome exists for."""
+    from app.usecases.scholarship_finder.fact_matching import amounts_match
+    from app.usecases.scholarship_finder.nodes import _compare_sets
+
+    assert _compare_sets(["992 EUR"], ["500 EUR"], amounts_match)[0] is False
+
+
+def test_several_values_and_no_match_is_unknown_not_disagreement():
+    """A full official page lists a stipend, a travel allowance and an
+    insurance contribution. Comparing the first of each side pairs two
+    numbers that were never about the same thing - four of five rejections
+    in one batch came from exactly that."""
+    from app.usecases.scholarship_finder.fact_matching import amounts_match
+    from app.usecases.scholarship_finder.nodes import _compare_sets
+
+    agrees, value = _compare_sets(["992 EUR"], ["500 EUR", "GBP 5,000"], amounts_match)
+
+    assert agrees is None
+    assert value is None
+
+
+def test_every_mention_is_kept_not_just_the_first():
+    from app.usecases.scholarship_finder.nodes import _values
+
+    assert _values(["992 EUR", "GBP 5,000", "992 EUR"]) == ["992 EUR", "GBP 5,000"]
+    assert _values(None) == []
