@@ -17,10 +17,33 @@ from typing import Any
 
 EXTRACTION_VERSION = "extract-v1"
 
-CURRENCY_AMOUNT_PATTERN = re.compile(r"[£$€]\s?[\d][\d,]*(?:\.\d+)?")
+#: A symbol before the number, or an ISO code on either side. Symbols
+#: alone missed how official pages actually write money: a DAAD excerpt
+#: reading "a monthly stipend of approximately 992 EUR" produced no
+#: funding mention at all, and sixteen grade-A records in a row reported
+#: "no evidence for funding" about text that stated it plainly.
+#: An explicit list, not `[A-Z]{3}`. Any three capitals beside a number
+#: made "ROOM 101" and "THE 2026 handbook" into funding - a false
+#: amount is worse than a missing one, because it can then be compared
+#: against a real figure and disagree with it.
+_CURRENCY_CODES = r"(?:GBP|USD|EUR|CAD|AUD|NZD|CHF|JPY|CNY|INR|ZAR|SEK|NOK|DKK|SGD|HKD|NGN|KES|GHS|TRY|BRL|MXN|PLN|CZK|HUF|RON|AED|SAR)"
+CURRENCY_AMOUNT_PATTERN = re.compile(
+    rf"(?:[£$€]\s?[\d][\d,]*(?:\.\d+)?"
+    rf"|\b{_CURRENCY_CODES}\s?[\d][\d,]*(?:\.\d+)?"
+    rf"|\b[\d][\d,]*(?:\.\d+)?\s?{_CURRENCY_CODES}\b)"
+)
+#: Month-name dates in either order, plus ISO. Only "March 15 2026"
+#: matched before, so "15 March 2026" - how most of the world writes it,
+#: and most of the pages we fetch - was not a deadline as far as this
+#: was concerned.
+_MONTHS = (
+    r"(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?"
+    r"|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)"
+)
 MONTH_NAME_DATE_PATTERN = re.compile(
-    r"\b(?:January|February|March|April|May|June|July|August|September|October|November|"
-    r"December)\s+\d{1,2}(?:st|nd|rd|th)?,?\s+\d{4}\b",
+    rf"\b(?:{_MONTHS}\s+\d{{1,2}}(?:st|nd|rd|th)?,?\s+\d{{4}}"
+    rf"|\d{{1,2}}(?:st|nd|rd|th)?\s+{_MONTHS},?\s+\d{{4}}"
+    r"|\d{4}-\d{2}-\d{2})\b",
     re.IGNORECASE,
 )
 _LEVEL_KEYWORDS = {

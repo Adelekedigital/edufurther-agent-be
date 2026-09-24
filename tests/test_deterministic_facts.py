@@ -209,3 +209,46 @@ def test_an_eligibility_phrase_is_captured_verbatim():
     facts = extract_candidate_facts("Award", "Open to international students.")
 
     assert facts["eligibility_phrase"] == "international students"
+
+
+# --- how official pages actually write money and dates ------------------
+
+
+def test_funding_written_with_an_iso_code_is_found():
+    """A DAAD excerpt reading "a monthly stipend of approximately 992 EUR"
+    produced no funding mention at all. Sixteen grade-A records in a row
+    then reported "no evidence for funding" about text stating it plainly -
+    the extractor matched currency symbols only."""
+    facts = extract_candidate_facts(
+        "DAAD Award", "Covers a monthly stipend of approximately 992 EUR plus insurance."
+    )
+
+    assert facts["funding_mentions"] == ["992 EUR"]
+
+
+def test_funding_with_the_code_before_the_number_is_found():
+    facts = extract_candidate_facts("Award", "The award is worth GBP 10,000 in total.")
+
+    assert facts["funding_mentions"] == ["GBP 10,000"]
+
+
+def test_a_date_written_day_first_is_found():
+    """Only "March 15 2026" matched, so the order most of the world uses -
+    and most of the pages we fetch - was not a deadline at all."""
+    facts = extract_candidate_facts("Award", "Applications close 15 March 2026.")
+
+    assert facts["deadline_mentions"] == ["15 March 2026"]
+
+
+def test_an_iso_date_is_found():
+    facts = extract_candidate_facts("Award", "Deadline: 2026-06-01 for all applicants.")
+
+    assert facts["deadline_mentions"] == ["2026-06-01"]
+
+
+def test_a_bare_three_letter_word_is_not_funding():
+    """`[A-Z]{3}` next to a number would make "ROOM 101" an amount. The
+    word boundary and the digits have to line up."""
+    facts = extract_candidate_facts("Award", "Report to ROOM 101 and see THE 2026 handbook.")
+
+    assert facts["funding_mentions"] == []
