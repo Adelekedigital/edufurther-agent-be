@@ -645,3 +645,58 @@ async def test_page_bodies_do_not_leak_into_the_checkpointed_state(wire):
     result = await run()
 
     assert "_official_text" not in result["candidates"][0]["model_facts"]
+
+
+# --- a list position is not part of an award's name ---------------------
+
+
+@pytest.mark.parametrize(
+    ("given", "expected"),
+    [
+        ("1. Chevening Scholarships", "Chevening Scholarships"),
+        ("17) Gates Cambridge Scholarships", "Gates Cambridge Scholarships"),
+        ("#3 Rhodes Scholarships", "Rhodes Scholarships"),
+        ("3: Clarendon Scholarships", "Clarendon Scholarships"),
+        ("7 - Fulbright Program", "Fulbright Program"),
+    ],
+)
+def test_a_list_position_is_stripped_from_a_split_title(given, expected):
+    """The number describes the page, not the award - and it reaches the
+    identity key, which is derived from the title. "1. Chevening" keyed as
+    `1|chevening|scholarships` while the same award at position 17 on
+    another page keyed as `17|chevening|scholarships`: two keys, one
+    scholarship, and dedupe silently broken."""
+    from app.usecases.scholarship_finder.nodes import _strip_list_ordinal
+
+    assert _strip_list_ordinal(given) == expected
+
+
+@pytest.mark.parametrize(
+    "given",
+    ["2026 Chevening Scholarships", "50 Fully Funded Awards", "100 Best Scholarships"],
+)
+def test_a_number_that_belongs_to_the_name_is_kept(given):
+    """A separator is required precisely so a year or a count in the award's
+    own name survives."""
+    from app.usecases.scholarship_finder.nodes import _strip_list_ordinal
+
+    assert _strip_list_ordinal(given) == given
+
+
+def test_a_heading_that_is_only_a_number_is_kept_verbatim():
+    """Better an odd title than a candidate that vanishes silently."""
+    from app.usecases.scholarship_finder.nodes import _strip_list_ordinal
+
+    assert _strip_list_ordinal("12.") == "12."
+
+
+def test_stripping_makes_the_same_award_key_the_same_wherever_it_sits():
+    """The point of the fix, stated as the property it protects."""
+    from app.usecases.scholarship_finder.nodes import _strip_list_ordinal
+    from app.usecases.scholarship_finder.normalization import normalize_discovery
+
+    url = "https://example.test/award"
+    first = normalize_discovery(_strip_list_ordinal("1. Chevening Scholarships"), url)
+    later = normalize_discovery(_strip_list_ordinal("17. Chevening Scholarships"), url)
+
+    assert first.identity_key == later.identity_key

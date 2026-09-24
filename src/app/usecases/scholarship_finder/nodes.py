@@ -15,6 +15,7 @@ raised - Scholarship Finder lost a whole harvest to one bad row once.
 """
 
 import logging
+import re
 from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import urlsplit
@@ -241,6 +242,35 @@ async def single_candidate(state: ScholarshipState) -> ScholarshipState:
     return ScholarshipState(candidates=[candidate.to_dict()], notes=["single candidate"])
 
 
+#: A list position at the start of a heading: "1.", "17)", "#3", "3 -".
+_LIST_ORDINAL = re.compile(r"^\s*(?:#\s*\d{1,3}\s+|\d{1,3}\s*[.)\];:-]\s+)")
+
+
+def _strip_list_ordinal(title: str) -> str:
+    """Drop the position a roundup gave an award, keep the award.
+
+    The number is about the page, not the scholarship, and it reaches
+    further than it looks: the identity key is derived from the title, so
+    "1. Chevening Scholarships" keyed as `1|chevening|scholarships` while
+    the same award at position 17 on another page keyed as
+    `17|chevening|scholarships`. Two keys, one scholarship - and the
+    identity key is what makes cross-source dedupe, corroboration counting
+    and supersedes lineage work at all.
+
+    It fails silently, which is the dangerous part. Fifty clean-looking
+    rows are created and nothing errors; the duplication only surfaces
+    later as a review queue full of the same award listed several times.
+
+    Deliberately conservative. A trailing separator and whitespace are
+    required, so "2026 Chevening Scholarships" and "50 Fully Funded
+    Awards" keep their numbers - those are part of the name.
+    """
+    stripped = _LIST_ORDINAL.sub("", title).strip()
+    # Never return empty: a heading that was *only* a number is better kept
+    # verbatim than dropped, since the candidate would vanish silently.
+    return stripped or title.strip()
+
+
 async def split_candidates(state: ScholarshipState) -> ScholarshipState:
     """Separate a list page into one candidate per named award."""
     discovery = state["discovery"]
@@ -289,14 +319,14 @@ async def split_candidates(state: ScholarshipState) -> ScholarshipState:
     candidates = [
         _new_candidate(
             state,
-            title=str(item.get("title") or "").strip(),
+            title=_strip_list_ordinal(str(item.get("title") or "")),
             url=str(item["url"]) if item.get("url") else None,
             excerpt=item.get("excerpt"),
             heading=item.get("heading"),
             prompt_versions={"split": response.prompt_version or ""},
         )
         for item in items
-        if str(item.get("title") or "").strip()
+        if _strip_list_ordinal(str(item.get("title") or ""))
     ]
     if not candidates:
         # A list page that yields nothing is a real answer, not a crash -
