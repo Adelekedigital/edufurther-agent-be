@@ -12,6 +12,7 @@ classifying one needs a sample. Truncating in the wrong place is how the
 tenth scholarship on a page silently stops existing.
 """
 
+import re
 from typing import Any
 
 #: Kept below each task's `max_source_bytes` in the router, with room for
@@ -36,13 +37,49 @@ def head(text: str | None, limit: int) -> str:
     return text if len(text) <= limit else text[:limit]
 
 
+#: Blocks that never carry award prose and routinely dominate the start of
+#: a modern page. A 290 KB editorial roundup opened with 31,000 characters
+#: of JSON-LD: the first 40,000 characters sent to the classifier
+#: contained the word "deadline" zero times, while the page as a whole
+#: contained it forty-eight times. The model was reading metadata and
+#: reasonably concluded nothing, so two roundups in three fell back to
+#: `individual` and were never split.
+_BOILERPLATE = re.compile(
+    r"<(script|style|noscript|svg|template|iframe)\b[^>]*>.*?</\1>",
+    re.IGNORECASE | re.DOTALL,
+)
+_COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
+_WHITESPACE = re.compile(r"[^\S\n]+")
+
+
+def readable(text: str | None, limit: int) -> str:
+    """Drop what cannot be content, then truncate.
+
+    Cheaper than being clever about *where* to truncate, and it addresses
+    the real problem: the head of a page is only unrepresentative because
+    so much of it is not page. Stripping took one real roundup from 289,000
+    characters to 92,000 - and its first 40,000 from no mention of a
+    stipend to eight.
+
+    Not a parser. It removes whole elements whose content is never prose
+    and collapses runs of spaces; tags themselves are left alone, since
+    headings are exactly the signal a classifier wants on a list page.
+    """
+    if not text:
+        return ""
+    cleaned = _BOILERPLATE.sub(" ", text)
+    cleaned = _COMMENT.sub(" ", cleaned)
+    cleaned = _WHITESPACE.sub(" ", cleaned)
+    return head(cleaned, limit)
+
+
 def classify_source_page(
     *, title: str | None, excerpt: str | None, page_text: str
 ) -> dict[str, Any]:
     return {
         "title": title or "",
         "excerpt": excerpt or "",
-        "page_text": head(page_text, CLASSIFY_PAGE_CHARS),
+        "page_text": readable(page_text, CLASSIFY_PAGE_CHARS),
     }
 
 
@@ -50,7 +87,7 @@ def split_list_candidates(*, source_url: str, title: str | None, page_text: str)
     return {
         "source_url": source_url,
         "title": title or "",
-        "page_text": head(page_text, SPLIT_PAGE_CHARS),
+        "page_text": readable(page_text, SPLIT_PAGE_CHARS),
     }
 
 
@@ -59,7 +96,7 @@ def extract_scholarship_facts(
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {"title": title, "excerpt": excerpt or ""}
     if page_text:
-        payload["page_text"] = head(page_text, EXTRACT_PAGE_CHARS)
+        payload["page_text"] = readable(page_text, EXTRACT_PAGE_CHARS)
     return payload
 
 
@@ -70,7 +107,7 @@ def compare_official_evidence(
         "title": title,
         "reported_facts": reported_facts,
         "official_url": official_url,
-        "official_page_text": head(official_text, COMPARE_PAGE_CHARS),
+        "official_page_text": readable(official_text, COMPARE_PAGE_CHARS),
     }
 
 
@@ -80,5 +117,5 @@ def extract_eligibility_requirements(
     return {
         "title": title,
         "source_url": source_url,
-        "page_text": head(page_text, EXTRACT_PAGE_CHARS),
+        "page_text": readable(page_text, EXTRACT_PAGE_CHARS),
     }
