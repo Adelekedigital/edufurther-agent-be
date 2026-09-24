@@ -26,7 +26,10 @@ EXTRACTION_VERSION = "extract-v1"
 #: made "ROOM 101" and "THE 2026 handbook" into funding - a false
 #: amount is worse than a missing one, because it can then be compared
 #: against a real figure and disagree with it.
-_CURRENCY_CODES = r"(?:GBP|USD|EUR|CAD|AUD|NZD|CHF|JPY|CNY|INR|ZAR|SEK|NOK|DKK|SGD|HKD|NGN|KES|GHS|TRY|BRL|MXN|PLN|CZK|HUF|RON|AED|SAR)"
+_CURRENCY_CODES = (
+    r"(?:GBP|USD|EUR|CAD|AUD|NZD|CHF|JPY|CNY|INR|ZAR|SEK|NOK|DKK|SGD"
+    r"|HKD|NGN|KES|GHS|TRY|BRL|MXN|PLN|CZK|HUF|RON|AED|SAR)"
+)
 CURRENCY_AMOUNT_PATTERN = re.compile(
     rf"(?:[£$€]\s?[\d][\d,]*(?:\.\d+)?"
     rf"|\b{_CURRENCY_CODES}\s?[\d][\d,]*(?:\.\d+)?"
