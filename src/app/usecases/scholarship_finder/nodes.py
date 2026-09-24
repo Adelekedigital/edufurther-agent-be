@@ -36,10 +36,16 @@ from app.integrations.scholarship_finder import (
     client_from_settings as sf_client_from_settings,
 )
 from app.tools.retrieval import MIN_USABLE_BODY_CHARS, fetch_official_page, fetch_page
+from app.tools.search import search_web
 from app.usecases.scholarship_finder import prompts
 from app.usecases.scholarship_finder.extraction import extract_candidate_facts
 from app.usecases.scholarship_finder.fact_matching import amounts_match, deadlines_match
 from app.usecases.scholarship_finder.normalization import normalize_discovery
+from app.usecases.scholarship_finder.official_source import (
+    host_labels,
+    pick_official,
+    search_query,
+)
 from app.usecases.scholarship_finder.policies import (
     decide_outcome,
     outcome_for_page_type,
@@ -482,32 +488,36 @@ def _same_page(a: str, b: str) -> bool:
 async def find_official_source(state: ScholarshipState) -> ScholarshipState:
     """Identify each candidate's official page.
 
-    Two signals, in the absence of a search tool:
+    Three signals, in order of how much they are worth:
 
     * a link that *leaves* the source's domain points at the provider, and
       counts;
     * a link that stays on it counts only when the source is itself
       authoritative - the product grades sources A-D precisely so this
-      question can be answered, and grade C or D means an aggregator.
+      question can be answered, and grade C or D means an aggregator;
+    * failing both, a web search, accepted only when the award's own name
+      appears in the domain. See `official_source`.
 
     The distinction matters most on a list page. An aggregator linking to
     its own page is not corroboration, however plausible the link looks;
     accepting it is exactly how one list page ends up standing as proof of
-    every award on it.
+    every award on it - and a search result is the same claim from a
+    stranger, so it is held to a stricter test rather than a looser one.
 
-    Deliberately limited, and the limit should be read into the pilot's
-    numbers: without a search tool, a candidate whose official page cannot
-    be identified this way comes out as MORE_EVIDENCE_REQUIRED. That is
-    correct behaviour, not a failure, but it caps the official-source
-    discovery rate.
+    The Stage 1 pilot ran without the third signal and found an official
+    source for 26 of 101 candidates. Search widens what can be reached; it
+    does not widen what may be believed. A candidate whose page still
+    cannot be named comes out as MORE_EVIDENCE_REQUIRED, exactly as before.
     """
     parent_host = _registrable(urlsplit(state["source_url"]).hostname or "")
+    source_labels = host_labels(urlsplit(state["source_url"]).hostname or "")
     grade = str((state.get("discovery") or {}).get("authority_grade") or "")
     source_is_authoritative = grade.upper() in AUTHORITATIVE_GRADES
     candidates = _candidates(state)
     for candidate in candidates:
         if not candidate.url:
             candidate.uncertainty_reasons.append("candidate has no link of its own")
+            await _search_for_official(candidate, state, source_labels)
             continue
         host = _registrable(urlsplit(candidate.url).hostname or "")
         if not host:
@@ -527,6 +537,7 @@ async def find_official_source(state: ScholarshipState) -> ScholarshipState:
                 "the only candidate link is the discovery's own page, which cannot corroborate "
                 "itself"
             )
+            await _search_for_official(candidate, state, source_labels)
             continue
         if host != parent_host or source_is_authoritative:
             candidate.official_url = candidate.url
@@ -535,7 +546,51 @@ async def find_official_source(state: ScholarshipState) -> ScholarshipState:
             f"candidate link stays on a grade-{grade or '?'} source domain, "
             "so it is not official evidence"
         )
+        await _search_for_official(candidate, state, source_labels)
     return ScholarshipState(candidates=_dump(candidates))
+
+
+async def _search_for_official(
+    candidate: Candidate, state: ScholarshipState, source_labels: set[str]
+) -> None:
+    """Last resort, and it only ever adds - never overrides a link.
+
+    A search result is an unsolicited claim from a stranger, so it is
+    accepted on one narrow ground: the award's own distinctive name appears
+    in the domain. Everything else is recorded as not found. The point of
+    the tool is to reach pages that were never linked, not to lower the bar
+    for what counts as the provider.
+    """
+    if candidate.official_url:
+        return
+    query = search_query(candidate.title, (state.get("discovery") or {}).get("provider_name"))
+    async with get_sessionmaker()() as db:
+        results = await search_web(db, query, job_id=state["job_id"])
+    if not results:
+        candidate.uncertainty_reasons.append("no official source found")
+        return
+    chosen = pick_official(
+        candidate.title,
+        results,
+        source_host_labels=source_labels,
+        excluded_hosts={(urlsplit(state["source_url"]).hostname or "").lower()},
+    )
+    if chosen is None:
+        # Which kind of nothing, said plainly. "Results came back and none
+        # named this award" invites a better query; "the search found the
+        # page we already have" does not. Both end the same way, and only
+        # one of them is worth trying again.
+        if any(_same_page(item.url, state["source_url"]) for item in results):
+            candidate.uncertainty_reasons.append(
+                "search found the discovery's own page, which cannot corroborate itself"
+            )
+        else:
+            candidate.uncertainty_reasons.append(
+                f"search returned {len(results)} result(s), none on a domain naming this award"
+            )
+        return
+    candidate.official_url = chosen.url
+    candidate.uncertainty_reasons.append(f"official page identified by search: {chosen.url}")
 
 
 async def fetch_official(state: ScholarshipState) -> ScholarshipState:
