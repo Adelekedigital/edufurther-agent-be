@@ -17,12 +17,16 @@ from app.tools.base import ToolDisabled
 
 DIRECT_FETCH = "direct_fetch"
 JINA = "jina"
+#: Its own switch, not Jina's. They fail independently: the reader has
+#: done every official-page read in the pipeline without an error, so a
+#: search returning noise must be stoppable on its own.
+JINA_SEARCH = "jina_search"
 TAVILY = "tavily"
 PARSEBOT = "parsebot"
 
 #: Every tool this build knows about. Listing them explicitly means a typo
 #: in DISABLED_TOOLS is caught rather than silently disabling nothing.
-KNOWN_TOOLS = frozenset({DIRECT_FETCH, JINA, TAVILY, PARSEBOT})
+KNOWN_TOOLS = frozenset({DIRECT_FETCH, JINA, JINA_SEARCH, TAVILY, PARSEBOT})
 
 #: Registered but not implemented until the harvest migration.
 UNIMPLEMENTED_TOOLS = frozenset({TAVILY, PARSEBOT})
@@ -53,6 +57,7 @@ def spec(tool: str) -> ToolSpec:
     timeouts = {
         DIRECT_FETCH: settings.fetch_timeout_seconds,
         JINA: settings.jina_timeout_seconds,
+        JINA_SEARCH: settings.jina_timeout_seconds,
         TAVILY: settings.tavily_timeout_seconds,
         PARSEBOT: settings.parsebot_timeout_seconds,
     }

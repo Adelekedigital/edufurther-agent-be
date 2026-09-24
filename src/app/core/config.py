@@ -99,8 +99,14 @@ class Settings(BaseSettings):
     disabled_tools: set[str] = Field(default_factory=set)
 
     jina_api_key: str | None = None
+    #: Reader and search share this. They are one vendor on one key, and a
+    #: budget that bounded only half the spend would not be a budget.
     jina_monthly_call_limit: int = 500
     jina_timeout_seconds: float = 30.0
+    #: Results to consider per search. Only the ones that pass the naming
+    #: test are usable, so a longer list costs nothing extra at the vendor
+    #: - one search is one call - and mostly adds rejected rows.
+    search_result_limit: int = 10
     fetch_timeout_seconds: float = 15.0
     fetch_connect_timeout_seconds: float = 5.0
     fetch_max_bytes: int = 2_000_000
